@@ -22,4 +22,8 @@ class Backtester:
             dd = (v - peak) / peak * 100
             if dd < max_drawdown_pct:
                 max_drawdown_pct = dd
-        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve, "max_drawdown_pct": max_drawdown_pct}
+        returns_series = [0.0] + [
+            (equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]
+            for i in range(1, len(equity_curve))
+        ]
+        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve, "max_drawdown_pct": max_drawdown_pct, "returns_series": returns_series}
