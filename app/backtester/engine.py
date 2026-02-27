@@ -12,19 +12,34 @@ class Backtester:
             raise ValueError("buy_and_hold requires at least 2 candles")
         if strategy is not None:
             signals = strategy.generate(candles)
-            buy_idx = next(i for i, s in enumerate(signals) if s == "BUY")
-            raw_buy  = candles[buy_idx]["close"]
-            raw_sell = candles[-1]["close"]
+            state = "FLAT"
+            cash = self.initial_cash
+            shares = 0.0
+            equity_curve = []
+            for i, signal in enumerate(signals):
+                price = candles[i]["close"]
+                if state == "FLAT" and signal == "BUY":
+                    shares = cash / price
+                    cash = 0.0
+                    state = "LONG"
+                elif state == "LONG" and signal == "SELL":
+                    cash = shares * price
+                    shares = 0.0
+                    state = "FLAT"
+                equity_curve.append(cash + shares * price)
+            if state == "LONG":
+                cash = shares * candles[-1]["close"]
+            final_equity = cash
         else:
             raw_buy  = candles[0]["close"]
             raw_sell = candles[-1]["close"]
-        buy_price = raw_buy  * (1 + slippage_pct / 100)
-        sell_price = raw_sell * (1 - slippage_pct / 100)
-        cash_after_entry_cost = self.initial_cash * (1 - transaction_cost_pct / 100)
-        shares = cash_after_entry_cost / buy_price
-        equity_curve = [shares * c["close"] for c in candles]
-        gross_exit = shares * sell_price
-        final_equity = gross_exit * (1 - transaction_cost_pct / 100)
+            buy_price = raw_buy  * (1 + slippage_pct / 100)
+            sell_price = raw_sell * (1 - slippage_pct / 100)
+            cash_after_entry_cost = self.initial_cash * (1 - transaction_cost_pct / 100)
+            shares = cash_after_entry_cost / buy_price
+            equity_curve = [shares * c["close"] for c in candles]
+            gross_exit = shares * sell_price
+            final_equity = gross_exit * (1 - transaction_cost_pct / 100)
         return_pct = (final_equity - self.initial_cash) / self.initial_cash * 100
         peak = equity_curve[0]
         max_drawdown_pct = 0.0
