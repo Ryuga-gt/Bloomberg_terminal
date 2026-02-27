@@ -5,25 +5,35 @@ execution.execution_gateway
 Candle-by-candle forward execution gateway for paper/live trading simulation.
 
 This is NOT a backtester.  It processes one candle at a time via
-``on_candle()``, maintaining live state (cash, position, equity, trade
-history, equity curve).
+``on_candle()``, delegating order execution to a :class:`BrokerInterface`
+implementation and optionally enforcing position-size limits via a
+:class:`RiskManager`.
 
 Usage
 -----
-    gateway = ExecutionGateway(MyStrategyClass, initial_cash=5000)
+    from execution.paper_broker import PaperBroker
+    from execution.risk_manager import RiskManager
+
+    broker = PaperBroker(initial_cash=5000)
+    rm     = RiskManager(max_position_pct=0.5)
+    gateway = ExecutionGateway(MyStrategyClass, broker, risk_manager=rm)
+
     for candle in live_feed:
         gateway.on_candle(candle)
+
     state = gateway.get_state()
 
 Execution model
 ---------------
-* All-in: a BUY uses all available cash to purchase shares at the
+* All-in BUY: uses all available broker cash to purchase shares at the
   candle's close price.
-* A SELL closes the entire position at the close price.
+* SELL: closes the entire position at the close price.
 * No shorting.
 * Redundant signals are silently ignored:
     - BUY when already LONG → ignored
     - SELL when already FLAT → ignored
+* If a :class:`RiskManager` is provided, the BUY order quantity is capped
+  before being sent to the broker.
 
 Signal interface
 ----------------
@@ -33,53 +43,51 @@ The strategy class must expose::
 
 Validation
 ----------
-* ``initial_cash`` must be > 0 → ``ValueError``
 * ``candle`` must contain the key ``"close"`` → ``KeyError``
 * Input candles are never mutated.
 """
 
+from execution.broker_interface import BrokerInterface
+from execution.order import Order, BUY, SELL
+
 
 class ExecutionGateway:
     """
-    Forward execution gateway.
+    Broker-driven forward execution gateway.
 
     Parameters
     ----------
     strategy_class : type
         Strategy class (not instance).  Must expose
         ``generate_signal(candle: dict) -> str``.
-    initial_cash : float, optional
-        Starting cash balance.  Must be > 0.  Default 1000.
-
-    Raises
-    ------
-    ValueError
-        If ``initial_cash`` is not > 0.
+    broker : BrokerInterface
+        Broker instance that executes orders and maintains cash/position.
+    risk_manager : RiskManager or None, optional
+        If provided, BUY order quantities are capped before execution.
+        Default ``None`` (no risk management).
     """
 
-    def __init__(self, strategy_class: type, initial_cash: float = 1000) -> None:
-        if initial_cash <= 0:
-            raise ValueError(
-                f"initial_cash must be > 0, got {initial_cash!r}"
-            )
-
+    def __init__(
+        self,
+        strategy_class: type,
+        broker: BrokerInterface,
+        risk_manager=None,
+    ) -> None:
         self._strategy = strategy_class()
-        self._initial_cash = float(initial_cash)
+        self._broker = broker
+        self._risk_manager = risk_manager
 
-        # Mutable state
-        self._cash: float = float(initial_cash)
-        self._position_size: float = 0.0   # shares held
-        self._current_price: float = 0.0
+        # Gateway-level state (broker owns cash/position)
         self._state: str = "FLAT"          # "FLAT" | "LONG"
+        self._current_price: float = 0.0
 
         self._equity_curve: list = []
         self._trade_history: list = []
 
     # ------------------------------------------------------------------
-    @property
-    def _equity(self) -> float:
-        """Current mark-to-market equity."""
-        return self._cash + self._position_size * self._current_price
+    def _equity(self, price: float) -> float:
+        """Mark-to-market equity at *price*."""
+        return self._broker.cash + self._broker.position_size * price
 
     # ------------------------------------------------------------------
     def on_candle(self, candle: dict) -> None:
@@ -104,36 +112,42 @@ class ExecutionGateway:
 
         signal = self._strategy.generate_signal(candle)
 
-        if signal == "BUY" and self._state == "FLAT":
-            # All-in purchase
-            shares = self._cash / price
-            self._position_size = shares
-            self._cash = 0.0
+        if signal == BUY and self._state == "FLAT":
+            # All-in: buy as many shares as cash allows
+            quantity = self._broker.cash / price
+            order = Order(side=BUY, quantity=quantity, price=price)
+
+            # Apply risk manager if present
+            if self._risk_manager is not None:
+                equity = self._equity(price)
+                order = self._risk_manager.adjust_order(order, equity)
+
+            fill = self._broker.execute_order(order)
             self._state = "LONG"
             self._trade_history.append({
-                "type": "BUY",
-                "price": price,
-                "shares": shares,
-                "cash_after": self._cash,
+                "type":       "BUY",
+                "price":      fill.price,
+                "shares":     fill.quantity,
+                "cash_after": self._broker.cash,
             })
 
-        elif signal == "SELL" and self._state == "LONG":
+        elif signal == SELL and self._state == "LONG":
             # Close full position
-            proceeds = self._position_size * price
-            self._cash = proceeds
-            self._position_size = 0.0
+            quantity = self._broker.position_size
+            order = Order(side=SELL, quantity=quantity, price=price)
+            fill = self._broker.execute_order(order)
             self._state = "FLAT"
             self._trade_history.append({
-                "type": "SELL",
-                "price": price,
-                "shares": 0.0,   # no shares held after sell
-                "cash_after": self._cash,
+                "type":       "SELL",
+                "price":      fill.price,
+                "shares":     fill.quantity,
+                "cash_after": self._broker.cash,
             })
 
         # HOLD or redundant signal → no action
 
         # Always update equity curve
-        self._equity_curve.append(self._equity)
+        self._equity_curve.append(self._equity(price))
 
     # ------------------------------------------------------------------
     def get_state(self) -> dict:
@@ -150,10 +164,11 @@ class ExecutionGateway:
             trade_history : list[dict]
             state         : str  ("FLAT" or "LONG")
         """
+        current_equity = self._equity(self._current_price)
         return {
-            "cash":          self._cash,
-            "position_size": self._position_size,
-            "equity":        self._equity,
+            "cash":          self._broker.cash,
+            "position_size": self._broker.position_size,
+            "equity":        current_equity,
             "equity_curve":  list(self._equity_curve),
             "trade_history": [dict(t) for t in self._trade_history],
             "state":         self._state,

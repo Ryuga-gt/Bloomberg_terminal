@@ -1,14 +1,18 @@
 """
 Tests for execution.execution_gateway.ExecutionGateway
 
-Contract
---------
-ExecutionGateway(strategy_class: type, initial_cash: float = 1000)
+Contract (broker-driven)
+------------------------
+ExecutionGateway(
+    strategy_class: type,
+    broker: BrokerInterface,
+    risk_manager: RiskManager | None = None,
+)
 
     on_candle(candle: dict) -> None
         Processes one candle; calls strategy.generate_signal(candle).
         Signals: "BUY" | "SELL" | "HOLD"
-        All-in execution model.
+        All-in execution model (via broker).
         Redundant signals silently ignored.
         Candle must contain "close" → KeyError otherwise.
 
@@ -19,7 +23,6 @@ ExecutionGateway(strategy_class: type, initial_cash: float = 1000)
 
 Validation
 ----------
-    initial_cash <= 0 → ValueError
     candle without "close" → KeyError
 
 Test strategies defined in this file:
@@ -27,11 +30,14 @@ Test strategies defined in this file:
     AlwaysBuyHold    — BUY on every candle (tests redundant BUY)
     AlwaysBuySell    — alternates BUY / SELL
     AlwaysFlat       — always HOLD
+    AlwaysSell       — always SELL (tests redundant SELL)
 """
 
 import pytest
 
 from execution.execution_gateway import ExecutionGateway
+from execution.paper_broker import PaperBroker
+from execution.risk_manager import RiskManager
 
 
 # ---------------------------------------------------------------------------
@@ -46,6 +52,15 @@ def make_candle(close: float) -> dict:
         "close":  close,
         "volume": 1_000_000,
     }
+
+
+# ---------------------------------------------------------------------------
+# Helper: build a gateway with a fresh PaperBroker
+# ---------------------------------------------------------------------------
+
+def make_gateway(strategy_class, initial_cash=1000, risk_manager=None):
+    broker = PaperBroker(initial_cash=initial_cash)
+    return ExecutionGateway(strategy_class, broker, risk_manager=risk_manager)
 
 
 # ---------------------------------------------------------------------------
@@ -97,24 +112,14 @@ class AlwaysSell:
 # Part 1 — Validation
 # ===========================================================================
 
-def test_initial_cash_zero_raises_value_error():
-    with pytest.raises(ValueError):
-        ExecutionGateway(AlwaysFlat, initial_cash=0)
-
-
-def test_initial_cash_negative_raises_value_error():
-    with pytest.raises(ValueError):
-        ExecutionGateway(AlwaysFlat, initial_cash=-100)
-
-
 def test_candle_without_close_raises_key_error():
-    gateway = ExecutionGateway(AlwaysFlat)
+    gateway = make_gateway(AlwaysFlat)
     with pytest.raises(KeyError):
         gateway.on_candle({"open": 100, "high": 100, "low": 100})
 
 
 def test_candle_empty_dict_raises_key_error():
-    gateway = ExecutionGateway(AlwaysFlat)
+    gateway = make_gateway(AlwaysFlat)
     with pytest.raises(KeyError):
         gateway.on_candle({})
 
@@ -125,56 +130,56 @@ def test_candle_empty_dict_raises_key_error():
 
 def test_buy_first_candle_shares_allocated():
     """BUY at price 100 with cash 1000 → 10 shares."""
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["position_size"] == pytest.approx(10.0)
 
 
 def test_buy_first_candle_cash_is_zero():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["cash"] == pytest.approx(0.0)
 
 
 def test_buy_first_candle_state_is_long():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["state"] == "LONG"
 
 
 def test_buy_first_candle_trade_history_length_one():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert len(state["trade_history"]) == 1
 
 
 def test_buy_first_candle_trade_type_is_buy():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["trade_history"][0]["type"] == "BUY"
 
 
 def test_buy_first_candle_trade_price_correct():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["trade_history"][0]["price"] == pytest.approx(100.0)
 
 
 def test_buy_first_candle_trade_shares_correct():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["trade_history"][0]["shares"] == pytest.approx(10.0)
 
 
 def test_buy_first_candle_trade_cash_after_is_zero():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["trade_history"][0]["cash_after"] == pytest.approx(0.0)
@@ -185,7 +190,7 @@ def test_buy_first_candle_trade_cash_after_is_zero():
 # ===========================================================================
 
 def test_sell_closes_position_position_size_zero():
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # SELL
     state = gateway.get_state()
@@ -193,7 +198,7 @@ def test_sell_closes_position_position_size_zero():
 
 
 def test_sell_closes_position_state_is_flat():
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # SELL
     state = gateway.get_state()
@@ -202,7 +207,7 @@ def test_sell_closes_position_state_is_flat():
 
 def test_sell_closes_position_cash_correct():
     """Buy 10 shares at 100, sell at 200 → cash = 2000."""
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY → 10 shares
     gateway.on_candle(make_candle(200.0))  # SELL → 10 * 200 = 2000
     state = gateway.get_state()
@@ -210,7 +215,7 @@ def test_sell_closes_position_cash_correct():
 
 
 def test_sell_trade_history_length_two():
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # SELL
     state = gateway.get_state()
@@ -218,7 +223,7 @@ def test_sell_trade_history_length_two():
 
 
 def test_sell_trade_type_is_sell():
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # SELL
     state = gateway.get_state()
@@ -226,7 +231,7 @@ def test_sell_trade_type_is_sell():
 
 
 def test_sell_trade_price_correct():
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # SELL
     state = gateway.get_state()
@@ -239,7 +244,7 @@ def test_sell_trade_price_correct():
 
 def test_redundant_buy_ignored_trade_history_length_one():
     """AlwaysBuyHold sends BUY every candle; only first should execute."""
-    gateway = ExecutionGateway(AlwaysBuyHold, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyHold, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY → LONG
     gateway.on_candle(make_candle(110.0))  # BUY again → ignored
     gateway.on_candle(make_candle(120.0))  # BUY again → ignored
@@ -248,7 +253,7 @@ def test_redundant_buy_ignored_trade_history_length_one():
 
 
 def test_redundant_buy_ignored_position_unchanged():
-    gateway = ExecutionGateway(AlwaysBuyHold, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyHold, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY → 10 shares
     gateway.on_candle(make_candle(110.0))  # BUY → ignored
     state = gateway.get_state()
@@ -261,7 +266,7 @@ def test_redundant_buy_ignored_position_unchanged():
 
 def test_redundant_sell_ignored_trade_history_empty():
     """AlwaysSell sends SELL every candle; none should execute (starts FLAT)."""
-    gateway = ExecutionGateway(AlwaysSell, initial_cash=1000)
+    gateway = make_gateway(AlwaysSell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     gateway.on_candle(make_candle(110.0))
     state = gateway.get_state()
@@ -270,7 +275,7 @@ def test_redundant_sell_ignored_trade_history_empty():
 
 def test_redundant_sell_after_close_ignored():
     """BUY then SELL then SELL again — second SELL must be ignored."""
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # SELL → FLAT
     gateway.on_candle(make_candle(300.0))  # BUY (3rd candle, count=2 → even → BUY)
@@ -285,13 +290,13 @@ def test_redundant_sell_after_close_ignored():
 # ===========================================================================
 
 def test_equity_before_any_candle_not_in_curve():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     state = gateway.get_state()
     assert state["equity_curve"] == []
 
 
 def test_equity_flat_strategy_equals_initial_cash():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["equity"] == pytest.approx(1000.0)
@@ -299,7 +304,7 @@ def test_equity_flat_strategy_equals_initial_cash():
 
 def test_equity_after_buy_equals_initial_cash():
     """After BUY at 100 with 1000 cash: equity = 0 + 10 * 100 = 1000."""
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["equity"] == pytest.approx(1000.0)
@@ -307,7 +312,7 @@ def test_equity_after_buy_equals_initial_cash():
 
 def test_equity_increases_with_price_rise():
     """Buy at 100, price rises to 200: equity = 0 + 10 * 200 = 2000."""
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # HOLD
     state = gateway.get_state()
@@ -316,7 +321,7 @@ def test_equity_increases_with_price_rise():
 
 def test_equity_after_sell_equals_cash():
     """After SELL, equity = cash (no position)."""
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY
     gateway.on_candle(make_candle(200.0))  # SELL → cash = 2000
     state = gateway.get_state()
@@ -328,14 +333,14 @@ def test_equity_after_sell_equals_cash():
 # ===========================================================================
 
 def test_equity_curve_length_one_candle():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert len(state["equity_curve"]) == 1
 
 
 def test_equity_curve_length_five_candles():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     for price in [100, 110, 120, 130, 140]:
         gateway.on_candle(make_candle(float(price)))
     state = gateway.get_state()
@@ -344,7 +349,7 @@ def test_equity_curve_length_five_candles():
 
 def test_equity_curve_values_flat_strategy():
     """Flat strategy: equity_curve should be constant at initial_cash."""
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     for price in [100, 200, 300]:
         gateway.on_candle(make_candle(float(price)))
     state = gateway.get_state()
@@ -353,7 +358,7 @@ def test_equity_curve_values_flat_strategy():
 
 def test_equity_curve_values_after_buy():
     """Buy at 100 (10 shares), then prices 110, 120 → equity 1100, 1200."""
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY → equity 1000
     gateway.on_candle(make_candle(110.0))  # HOLD → equity 1100
     gateway.on_candle(make_candle(120.0))  # HOLD → equity 1200
@@ -366,7 +371,7 @@ def test_equity_curve_values_after_buy():
 # ===========================================================================
 
 def test_flat_strategy_zero_trades():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     for price in [100, 110, 120, 130]:
         gateway.on_candle(make_candle(float(price)))
     state = gateway.get_state()
@@ -374,7 +379,7 @@ def test_flat_strategy_zero_trades():
 
 
 def test_flat_strategy_state_remains_flat():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     for price in [100, 110, 120]:
         gateway.on_candle(make_candle(float(price)))
     state = gateway.get_state()
@@ -382,7 +387,7 @@ def test_flat_strategy_state_remains_flat():
 
 
 def test_flat_strategy_cash_unchanged():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     for price in [100, 110, 120]:
         gateway.on_candle(make_candle(float(price)))
     state = gateway.get_state()
@@ -394,20 +399,20 @@ def test_flat_strategy_cash_unchanged():
 # ===========================================================================
 
 def test_initial_state_is_flat():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     state = gateway.get_state()
     assert state["state"] == "FLAT"
 
 
 def test_state_is_long_after_buy():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     assert state["state"] == "LONG"
 
 
 def test_state_is_flat_after_sell():
-    gateway = ExecutionGateway(AlwaysBuySell, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuySell, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))  # BUY → LONG
     gateway.on_candle(make_candle(200.0))  # SELL → FLAT
     state = gateway.get_state()
@@ -421,12 +426,12 @@ def test_state_is_flat_after_sell():
 def test_deterministic_same_candles_same_result():
     candles = [make_candle(float(100 + i * 10)) for i in range(5)]
 
-    gateway1 = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway1 = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     for c in candles:
         gateway1.on_candle(c)
     state1 = gateway1.get_state()
 
-    gateway2 = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway2 = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     for c in candles:
         gateway2.on_candle(c)
     state2 = gateway2.get_state()
@@ -444,7 +449,7 @@ def test_deterministic_same_candles_same_result():
 def test_on_candle_does_not_mutate_input():
     candle = make_candle(100.0)
     original = dict(candle)
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(candle)
     assert candle == original
 
@@ -454,7 +459,7 @@ def test_on_candle_does_not_mutate_input():
 # ===========================================================================
 
 def test_get_state_equity_curve_is_copy():
-    gateway = ExecutionGateway(AlwaysFlat, initial_cash=1000)
+    gateway = make_gateway(AlwaysFlat, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     state["equity_curve"].append(9999.0)
@@ -464,7 +469,7 @@ def test_get_state_equity_curve_is_copy():
 
 
 def test_get_state_trade_history_is_copy():
-    gateway = ExecutionGateway(AlwaysBuyFirst, initial_cash=1000)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000)
     gateway.on_candle(make_candle(100.0))
     state = gateway.get_state()
     state["trade_history"].append({"type": "FAKE"})
@@ -473,10 +478,64 @@ def test_get_state_trade_history_is_copy():
 
 
 # ===========================================================================
-# Part 13 — default initial_cash is 1000
+# Part 13 — Broker state reflected correctly
+# ===========================================================================
+
+def test_broker_cash_reflected_in_get_state():
+    broker = PaperBroker(initial_cash=2000)
+    gateway = ExecutionGateway(AlwaysBuyFirst, broker)
+    gateway.on_candle(make_candle(100.0))  # BUY 20 shares
+    state = gateway.get_state()
+    assert state["cash"] == pytest.approx(broker.cash)
+
+
+def test_broker_position_reflected_in_get_state():
+    broker = PaperBroker(initial_cash=2000)
+    gateway = ExecutionGateway(AlwaysBuyFirst, broker)
+    gateway.on_candle(make_candle(100.0))  # BUY 20 shares
+    state = gateway.get_state()
+    assert state["position_size"] == pytest.approx(broker.position_size)
+
+
+# ===========================================================================
+# Part 14 — Gateway works with RiskManager
+# ===========================================================================
+
+def test_risk_manager_caps_buy_quantity():
+    """
+    equity=1000, pct=0.5 → max_value=500, max_qty=5 at price=100.
+    Without RM: 10 shares. With RM: 5 shares.
+    """
+    rm = RiskManager(max_position_pct=0.5)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000, risk_manager=rm)
+    gateway.on_candle(make_candle(100.0))
+    state = gateway.get_state()
+    assert state["position_size"] == pytest.approx(5.0)
+
+
+def test_risk_manager_leaves_remaining_cash():
+    """After capped BUY: cash = 1000 - 5*100 = 500."""
+    rm = RiskManager(max_position_pct=0.5)
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000, risk_manager=rm)
+    gateway.on_candle(make_candle(100.0))
+    state = gateway.get_state()
+    assert state["cash"] == pytest.approx(500.0)
+
+
+def test_gateway_works_without_risk_manager():
+    """No RM: all-in BUY at 100 with 1000 → 10 shares."""
+    gateway = make_gateway(AlwaysBuyFirst, initial_cash=1000, risk_manager=None)
+    gateway.on_candle(make_candle(100.0))
+    state = gateway.get_state()
+    assert state["position_size"] == pytest.approx(10.0)
+
+
+# ===========================================================================
+# Part 15 — default initial_cash is 1000 (via PaperBroker)
 # ===========================================================================
 
 def test_default_initial_cash_is_1000():
-    gateway = ExecutionGateway(AlwaysFlat)
+    broker = PaperBroker(initial_cash=1000)
+    gateway = ExecutionGateway(AlwaysFlat, broker)
     state = gateway.get_state()
     assert state["cash"] == pytest.approx(1000.0)
