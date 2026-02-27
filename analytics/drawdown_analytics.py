@@ -108,8 +108,11 @@ class DrawdownAnalytics:
         if n == 1:
             return 0
 
-        # Find the index of the maximum drawdown
+        # No drawdown at all
         min_dd = self.max_drawdown()
+        if min_dd == 0.0:
+            return 0
+
         trough_idx = self._dd_series.index(min_dd)
 
         # Walk back to find the peak before the trough

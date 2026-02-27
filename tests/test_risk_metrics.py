@@ -118,7 +118,8 @@ def test_downside_deviation_no_negative_returns_is_zero():
 
 
 def test_downside_deviation_positive_when_negative_returns_exist():
-    rm = RiskMetrics([1000.0, 1100.0, 1050.0, 1150.0])
+    # Two negative returns needed for sample std to be non-zero
+    rm = RiskMetrics([1000.0, 1100.0, 1050.0, 1150.0, 1080.0, 1200.0])
     assert rm.downside_deviation() > 0
 
 
