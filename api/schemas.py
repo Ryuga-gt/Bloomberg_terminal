@@ -78,6 +78,39 @@ class ResearchResponse(BaseModel):
     analytics:       Optional[Dict[str, Any]]
     error:           Optional[str] = None
 
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "symbol": "AAPL",
+                "candle_count": 756,
+                "best_genome": {"type": "moving_average", "short": 5, "long": 20},
+                "best_fitness": 0.42,
+                "ranking_results": [
+                    {
+                        "strategy_name": "MA_5_20",
+                        "backtest": {
+                            "return_pct": 45.2,
+                            "sharpe_ratio": 0.85,
+                            "calmar_ratio": 2.1,
+                            "max_drawdown_pct": -18.5
+                        },
+                        "composite_score": 1.23,
+                        "rank": 1,
+                        "robustness": 0.65
+                    }
+                ],
+                "equity_curve": [10000.0, 10150.0, 10320.0, 10280.0],
+                "analytics": {
+                    "total_return": 0.452,
+                    "sharpe": 0.85,
+                    "max_drawdown": -0.185,
+                    "volatility": 0.22
+                },
+                "error": None
+            }
+        }
+    }
+
 
 class PortfolioSummaryResponse(BaseModel):
     final_portfolio_equity: float
