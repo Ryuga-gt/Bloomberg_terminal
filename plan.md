@@ -15,3 +15,19 @@
   - For executing tasks, use subagent-driven-development with two-stage review. Human approval required before any code that could touch external systems is merged.
 - Testing: produce unit tests and an example end-to-end run in CI.
 - Commit frequently; create incremental PRs with worklog. Keep tasks < 700s per step to fit Kilo invocation limits.
+
+## Agent Operating Rules (Claude Sonnet 4.6)
+
+- Never change architecture without explicit instruction.
+- Never refactor unrelated files.
+- Always follow strict TDD: write failing test first.
+- Keep tasks under 300 lines of diff.
+- Do not introduce new dependencies without approval.
+- Do not touch execution logic without human approval.
+- Never access external APIs unless explicitly instructed.
+- Produce minimal viable implementations first.
+
+### Diff Size Rule
+Each task must modify at most:
+- 1 production file
+- 1 test file
