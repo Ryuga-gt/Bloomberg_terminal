@@ -21,6 +21,13 @@ CANDLES_3 = [
     {"timestamp": "2024-01-03", "open": 105.0, "high": 111.0, "low": 104.5, "close": 110.0, "volume": 1_200_000},
 ]
 
+# Flat candles for zero-volatility / zero-sharpe guard test:
+#   returns = [0.0, 0.0] → std_dev = 0.0 → sharpe_ratio = 0.0
+CANDLES_FLAT = [
+    {"timestamp": "2024-01-01", "open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0, "volume": 1_000_000},
+    {"timestamp": "2024-01-02", "open": 99.0, "high": 101.0, "low": 98.0, "close": 100.0, "volume": 1_000_000},
+]
+
 # Four candles with a drawdown for max_drawdown_pct test:
 #   shares = 1000 / 100 = 10.0
 #   equity_curve = [1000.0, 1200.0, 900.0, 1300.0]
@@ -229,3 +236,41 @@ def test_volatility_pct_equals_sample_std_dev_of_returns_times_100():
 
     # KeyError: 'volatility_pct' — feature missing → RED
     assert result["volatility_pct"] == pytest.approx(expected_volatility_pct, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# sharpe_ratio
+# RED: run() does not return sharpe_ratio key yet →
+#      KeyError: 'sharpe_ratio'
+#
+# Definition:
+#   mean_return   = mean(returns_series)
+#   std_dev       = sample_std_dev(returns_series)   (same as volatility_pct/100)
+#   sharpe_ratio  = mean_return / std_dev
+#   if std_dev == 0 → sharpe_ratio = 0.0
+#
+# For CANDLES_3 returns = [0.0, 0.05, 1/21]:
+#   all irrational → pytest.approx required
+# ---------------------------------------------------------------------------
+
+def test_sharpe_ratio_normal():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_3, mode="buy_and_hold")
+
+    # Compute expected with same formula the implementation must use
+    r = result["returns_series"]
+    n = len(r)
+    mean_r = sum(r) / n
+    variance = sum((x - mean_r) ** 2 for x in r) / (n - 1)
+    std_dev = math.sqrt(variance)
+    expected_sharpe = mean_r / std_dev
+
+    # KeyError: 'sharpe_ratio' — feature missing → RED
+    assert result["sharpe_ratio"] == pytest.approx(expected_sharpe, rel=1e-9)
+
+
+def test_sharpe_ratio_zero_when_volatility_is_zero():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_FLAT, mode="buy_and_hold")
+    # returns = [0.0, 0.0] → std_dev = 0.0 → sharpe must be 0.0, not ZeroDivisionError
+    assert result["sharpe_ratio"] == 0.0
