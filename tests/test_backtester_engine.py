@@ -311,3 +311,26 @@ def test_calmar_ratio_zero_when_no_drawdown():
     # → calmar must be 0.0, not ZeroDivisionError
     assert result["max_drawdown_pct"] == 0.0
     assert result["calmar_ratio"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# strategy abstraction layer
+# RED: run() does not accept strategy kwarg yet →
+#      TypeError: run() got an unexpected keyword argument 'strategy'
+#
+# AlwaysLongStrategy.generate() returns one signal per candle:
+#   ["BUY"] + ["HOLD"] * (len(candles) - 1)
+# With buy_and_hold semantics this is identical to the current default
+# behaviour, so final_equity must still equal 1100.0 for CANDLES_3.
+# ---------------------------------------------------------------------------
+
+class AlwaysLongStrategy:
+    def generate(self, candles: list[dict]) -> list[str]:
+        return ["BUY"] + ["HOLD"] * (len(candles) - 1)
+
+
+def test_strategy_always_long_produces_same_result_as_default():
+    bt = Backtester(initial_cash=1000)
+    # TypeError: run() got an unexpected keyword argument 'strategy' → RED
+    result = bt.run(CANDLES_3, strategy=AlwaysLongStrategy())
+    assert result["final_equity"] == 1100.0
