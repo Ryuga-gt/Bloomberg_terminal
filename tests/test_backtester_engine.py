@@ -1,3 +1,5 @@
+import pytest
+
 from app.backtester.engine import Backtester
 
 # Two deterministic candles:
@@ -155,3 +157,45 @@ def test_backtester_zero_costs_matches_no_cost_result():
         slippage_pct=0.0,
     )
     assert zeroed["final_equity"] == plain["final_equity"]
+
+
+# ---------------------------------------------------------------------------
+# returns_series
+# RED: run() does not return returns_series key yet →
+#      KeyError: 'returns_series'
+#
+# Formula:
+#   returns[0]   = 0.0  (base period, no prior)
+#   returns[i]   = (equity[i] - equity[i-1]) / equity[i-1]   for i >= 1
+#
+# For CANDLES_3 equity = [1000.0, 1050.0, 1100.0]:
+#   returns[0] = 0.0
+#   returns[1] = (1050 - 1000) / 1000 = 0.05           (exact)
+#   returns[2] = (1100 - 1050) / 1050 = 1/21 ≈ 0.047619 (approx)
+# ---------------------------------------------------------------------------
+
+def test_returns_series_length_matches_equity_curve():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_3, mode="buy_and_hold")
+    # KeyError: 'returns_series' → RED
+    assert len(result["returns_series"]) == len(result["equity_curve"])
+
+
+def test_returns_series_first_element_is_zero():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_3, mode="buy_and_hold")
+    assert result["returns_series"][0] == 0.0
+
+
+def test_returns_series_second_element():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_3, mode="buy_and_hold")
+    # (1050 - 1000) / 1000 = 0.05 — exact in IEEE 754
+    assert result["returns_series"][1] == 0.05
+
+
+def test_returns_series_third_element():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_3, mode="buy_and_hold")
+    # (1100 - 1050) / 1050 = 1/21 — not exactly representable, use approx
+    assert result["returns_series"][2] == pytest.approx(1 / 21, rel=1e-9)
