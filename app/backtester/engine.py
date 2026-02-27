@@ -11,4 +11,12 @@ class Backtester:
         equity_curve = [shares * c["close"] for c in candles]
         final_equity = equity_curve[-1]
         return_pct = (final_equity - self.initial_cash) / self.initial_cash * 100
-        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve}
+        peak = equity_curve[0]
+        max_drawdown_pct = 0.0
+        for v in equity_curve:
+            if v > peak:
+                peak = v
+            dd = (v - peak) / peak * 100
+            if dd < max_drawdown_pct:
+                max_drawdown_pct = dd
+        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve, "max_drawdown_pct": max_drawdown_pct}
