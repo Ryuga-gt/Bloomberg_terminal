@@ -20,12 +20,11 @@ At each rebalance step the manager:
 3. Falls back to the original strategy list if all active strategies are
    disabled.
 4. Computes new weights via ``allocator.compute_weights()``.
-5. Instantiates a fresh ``PortfolioEngine`` with the active strategies and
-   weighted capital, then re-runs it from candle 0 to the current step to
-   obtain the equity at that point.
+5. Runs the next segment (candles from current step to next rebalance)
+   using a fresh ``PortfolioEngine`` seeded with the current equity.
 
-The equity curve is built step-by-step: at each candle the current
-portfolio's equity at that step is recorded.
+The equity curve is built segment-by-segment: each segment starts from
+the equity at the end of the previous segment.
 
 Design constraints
 ------------------
@@ -34,8 +33,6 @@ Design constraints
 * Deterministic.
 * No async, no threading, no logging.
 """
-
-import copy
 
 from execution.portfolio_engine import PortfolioEngine
 
@@ -116,86 +113,99 @@ class PortfolioLifecycleManager:
                 "equity_curve":           [],
             }
 
-        # Track which strategy classes are still active (by class object)
+        n = len(candles)
         active_strategies = list(self._strategies)
         disabled_names: list = []
         rebalance_steps: list = []
-
-        # Current portfolio engine — starts with equal allocation.
-        current_engine = _WeightedPortfolioEngine(
-            strategies=active_strategies,
-            weights={cls.__name__: 1.0 / len(active_strategies)
-                     for cls in active_strategies},
-            initial_capital=self._initial_capital,
-        )
-
         equity_curve: list = []
 
-        for step, candle in enumerate(candles):
-            if self._rebalance_policy.should_rebalance(step):
-                rebalance_steps.append(step)
+        # Current capital and weights
+        current_capital = self._initial_capital
+        current_weights = {
+            cls.__name__: 1.0 / len(active_strategies)
+            for cls in active_strategies
+        }
 
-                # --- 1. Rank on candles seen so far (inclusive) ---
-                window = candles[: step + 1]
-                try:
-                    ranking_results = self._ranking_engine.run(window)
-                except Exception:
-                    # If ranking fails (e.g. too few candles), keep current
-                    ranking_results = None
+        # Find all rebalance points
+        rebalance_points = [i for i in range(n)
+                            if self._rebalance_policy.should_rebalance(i)]
 
-                if ranking_results is not None:
-                    # --- 2. Decay detection ---
-                    if self._decay_detector is not None:
-                        for result in ranking_results:
-                            name = result["strategy_name"]
-                            # Only check strategies still active
-                            if name not in disabled_names:
-                                if self._decay_detector.is_decayed(result):
-                                    disabled_names.append(name)
+        # Build segment boundaries: [start, end) pairs
+        # Each segment runs from one rebalance point to the next
+        if not rebalance_points:
+            rebalance_points = [0]
 
-                    # --- 3. Determine active strategy classes ---
-                    new_active = [
-                        cls for cls in self._strategies
-                        if cls.__name__ not in disabled_names
-                    ]
-                    if not new_active:
-                        # Fallback: restore all original strategies
-                        new_active = list(self._strategies)
+        # Ensure we start at 0
+        if rebalance_points[0] != 0:
+            rebalance_points = [0] + rebalance_points
 
-                    active_strategies = new_active
+        # Add sentinel end
+        boundaries = list(rebalance_points) + [n]
 
-                    # --- 4. Compute weights ---
-                    # Filter ranking_results to active strategies only
-                    active_names = {cls.__name__ for cls in active_strategies}
-                    active_results = [
-                        r for r in ranking_results
-                        if r["strategy_name"] in active_names
-                    ]
+        for seg_idx in range(len(boundaries) - 1):
+            seg_start = boundaries[seg_idx]
+            seg_end   = boundaries[seg_idx + 1]
+            seg_candles = candles[seg_start:seg_end]
 
-                    if active_results:
-                        weights = self._allocator.compute_weights(active_results)
-                    else:
-                        # Fallback equal
-                        n = len(active_strategies)
-                        weights = {cls.__name__: 1.0 / n
-                                   for cls in active_strategies}
+            if not seg_candles:
+                continue
 
-                    # --- 5. Re-instantiate PortfolioEngine ---
-                    # Use CURRENT portfolio equity as the new capital base
-                    # so that equity rolls forward continuously.
-                    current_equity = (
-                        equity_curve[-1] if equity_curve
-                        else self._initial_capital
-                    )
-                    current_engine = _WeightedPortfolioEngine(
-                        strategies=active_strategies,
-                        weights=weights,
-                        initial_capital=current_equity,
-                    )
+            # --- Rebalance at seg_start ---
+            rebalance_steps.append(seg_start)
 
-            # --- Feed current candle to the current engine ---
-            current_engine.step(candle)
-            equity_curve.append(current_engine.current_equity())
+            # Rank on candles seen so far (up to and including seg_start)
+            window = candles[: seg_start + 1]
+            try:
+                ranking_results = self._ranking_engine.run(window)
+            except Exception:
+                ranking_results = None
+
+            if ranking_results is not None:
+                # Decay detection
+                if self._decay_detector is not None:
+                    for result in ranking_results:
+                        name = result["strategy_name"]
+                        if name not in disabled_names:
+                            if self._decay_detector.is_decayed(result):
+                                disabled_names.append(name)
+
+                # Determine active strategies
+                new_active = [
+                    cls for cls in self._strategies
+                    if cls.__name__ not in disabled_names
+                ]
+                if not new_active:
+                    new_active = list(self._strategies)
+                active_strategies = new_active
+
+                # Compute weights
+                active_names = {cls.__name__ for cls in active_strategies}
+                active_results = [
+                    r for r in ranking_results
+                    if r["strategy_name"] in active_names
+                ]
+                if active_results:
+                    current_weights = self._allocator.compute_weights(active_results)
+                else:
+                    n_act = len(active_strategies)
+                    current_weights = {
+                        cls.__name__: 1.0 / n_act
+                        for cls in active_strategies
+                    }
+
+            # --- Run this segment with current capital ---
+            seg_equity_curve = self._run_segment(
+                strategies=active_strategies,
+                weights=current_weights,
+                capital=current_capital,
+                candles=seg_candles,
+            )
+
+            equity_curve.extend(seg_equity_curve)
+
+            # Update capital for next segment
+            if seg_equity_curve:
+                current_capital = seg_equity_curve[-1]
 
         final_equity = equity_curve[-1] if equity_curve else self._initial_capital
 
@@ -206,72 +216,57 @@ class PortfolioLifecycleManager:
             "equity_curve":           equity_curve,
         }
 
+    # ------------------------------------------------------------------
 
-# ---------------------------------------------------------------------------
-# Internal helper: weighted portfolio engine
-# ---------------------------------------------------------------------------
-
-class _WeightedPortfolioEngine:
-    """
-    Internal helper that runs one :class:`PortfolioEngine` per strategy
-    with capital proportional to the given weights.
-
-    This allows weighted (non-equal) capital allocation while reusing the
-    existing :class:`PortfolioEngine` infrastructure.
-    """
-
-    def __init__(
+    def _run_segment(
         self,
         strategies: list,
         weights: dict,
-        initial_capital: float,
-    ) -> None:
-        self._engines = []
+        capital: float,
+        candles: list,
+    ) -> list:
+        """
+        Run a single segment of candles and return the equity curve.
+
+        Each strategy gets capital proportional to its weight.
+        Returns a list of equity values, one per candle.
+        """
+        if not candles or capital <= 0:
+            return [capital] * len(candles)
+
+        # Build per-strategy engines with weighted capital
+        engines = []
         for cls in strategies:
             name = cls.__name__
             w = weights.get(name, 0.0)
-            capital = initial_capital * w
-            if capital > 0:
+            strat_capital = capital * w
+            if strat_capital > 0:
                 engine = PortfolioEngine(
                     strategies=[cls],
-                    initial_capital=capital,
+                    initial_capital=strat_capital,
                     allocation="equal",
                 )
-                self._engines.append(engine)
+                engines.append(engine)
 
-        # Fallback: if all weights are 0, use equal allocation
-        if not self._engines:
+        if not engines:
+            # Fallback: equal allocation
             n = len(strategies)
             for cls in strategies:
                 engine = PortfolioEngine(
                     strategies=[cls],
-                    initial_capital=initial_capital / n,
+                    initial_capital=capital / n,
                     allocation="equal",
                 )
-                self._engines.append(engine)
+                engines.append(engine)
 
-        # History of candles fed so far (for re-run after rebalance)
-        self._candle_history: list = []
+        # Run all engines on the segment candles
+        results = [engine.run(candles) for engine in engines]
 
-    def step(self, candle: dict) -> None:
-        """Feed *candle* to all sub-engines."""
-        self._candle_history.append(candle)
-        for engine in self._engines:
-            # Each engine maintains its own internal state; we feed
-            # candles one at a time by calling run() on the accumulated
-            # history and reading the last equity curve value.
-            # Since PortfolioEngine.run() is idempotent (resets curve),
-            # we call it with the full history each time.
-            pass  # handled in current_equity via full re-run
+        # Aggregate equity curve step by step
+        seg_len = len(candles)
+        seg_equity = []
+        for i in range(seg_len):
+            step_equity = sum(r["portfolio_equity_curve"][i] for r in results)
+            seg_equity.append(step_equity)
 
-    def current_equity(self) -> float:
-        """Return the current total portfolio equity."""
-        if not self._candle_history:
-            return sum(
-                e._initial_capital for e in self._engines
-            )
-        total = 0.0
-        for engine in self._engines:
-            result = engine.run(self._candle_history)
-            total += result["portfolio_equity"]
-        return total
+        return seg_equity
