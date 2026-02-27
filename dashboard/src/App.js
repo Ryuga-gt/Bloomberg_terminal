@@ -1,225 +1,240 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import axios from 'axios';
+import './theme.css';
 import TerminalLayout from './components/TerminalLayout';
-import EquityChart from './components/EquityChart';
-import MetricsPanel from './components/MetricsPanel';
-import StrategyTable from './components/StrategyTable';
 
-const API_BASE = process.env.REACT_APP_API_URL || 'http://localhost:8000';
-const WS_URL   = process.env.REACT_APP_WS_URL  || 'ws://localhost:8000/stream/equity';
+const DEFAULT_FORM = {
+  symbol: 'SPY',
+  start_date: '2020-01-01',
+  end_date: '2024-01-01',
+  initial_capital: 100000,
+};
 
-// ---------------------------------------------------------------------------
-// Helpers
-// ---------------------------------------------------------------------------
-const formatCurrency = (v) =>
-  v != null ? `$${v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` : '—';
+function App() {
+  const [equityData, setEquityData] = useState([]);
+  const [metrics, setMetrics] = useState({});
+  const [strategies, setStrategies] = useState([]);
+  const [isLive, setIsLive] = useState(false);
+  const [portfolioValue, setPortfolioValue] = useState(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState(null);
+  const [showForm, setShowForm] = useState(true);
+  const [form, setForm] = useState(DEFAULT_FORM);
 
-// ---------------------------------------------------------------------------
-// App
-// ---------------------------------------------------------------------------
-export default function App() {
-  // Form state
-  const [symbol, setSymbol]   = useState('AAPL');
-  const [start,  setStart]    = useState('2020-01-01');
-  const [end,    setEnd]      = useState('2023-01-01');
-  const [capital, setCapital] = useState(10000);
-
-  // Result state
-  const [loading,    setLoading]    = useState(false);
-  const [error,      setError]      = useState(null);
-  const [result,     setResult]     = useState(null);
-  const [liveEquity, setLiveEquity] = useState(null);
-  const [wsStatus,   setWsStatus]   = useState('disconnected');
-
-  // WebSocket ref
   const wsRef = useRef(null);
+  const reconnectTimerRef = useRef(null);
 
-  // Connect WebSocket
-  useEffect(() => {
-    const connect = () => {
-      const ws = new WebSocket(WS_URL);
-      wsRef.current = ws;
+  const connectWebSocket = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) return;
 
-      ws.onopen = () => setWsStatus('connected');
-      ws.onclose = () => {
-        setWsStatus('disconnected');
-        setTimeout(connect, 3000); // auto-reconnect
+    try {
+      const ws = new WebSocket('ws://localhost:8000/stream/equity');
+
+      ws.onopen = () => {
+        setIsLive(true);
+        setError(null);
+        if (reconnectTimerRef.current) {
+          clearTimeout(reconnectTimerRef.current);
+          reconnectTimerRef.current = null;
+        }
       };
-      ws.onerror = () => setWsStatus('error');
-      ws.onmessage = (evt) => {
+
+      ws.onmessage = (event) => {
         try {
-          const msg = JSON.parse(evt.data);
-          if (msg.type === 'equity_update') {
-            setLiveEquity(msg.equity);
+          const data = JSON.parse(event.data);
+          if (data.type === 'equity_update') {
+            setEquityData((prev) => {
+              const updated = [...prev, { date: data.timestamp, value: data.value }];
+              return updated.slice(-500); // Keep last 500 points
+            });
+            setPortfolioValue(data.value);
+          } else if (data.type === 'metrics_update') {
+            setMetrics(data.metrics);
           }
-        } catch (_) {}
+        } catch (e) {
+          // Ignore parse errors
+        }
       };
-    };
-    connect();
-    return () => wsRef.current?.close();
+
+      ws.onerror = () => {
+        setIsLive(false);
+      };
+
+      ws.onclose = () => {
+        setIsLive(false);
+        wsRef.current = null;
+        // Auto-reconnect after 5 seconds
+        reconnectTimerRef.current = setTimeout(connectWebSocket, 5000);
+      };
+
+      wsRef.current = ws;
+    } catch (e) {
+      setIsLive(false);
+      reconnectTimerRef.current = setTimeout(connectWebSocket, 5000);
+    }
   }, []);
 
-  // Run research
-  const handleResearch = useCallback(async () => {
-    setLoading(true);
+  useEffect(() => {
+    connectWebSocket();
+    return () => {
+      if (wsRef.current) wsRef.current.close();
+      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+    };
+  }, [connectWebSocket]);
+
+  const handleFormChange = (e) => {
+    const { name, value } = e.target;
+    setForm((prev) => ({ ...prev, [name]: value }));
+  };
+
+  const handleRunResearch = async (e) => {
+    e.preventDefault();
+    setIsLoading(true);
     setError(null);
+
     try {
-      const resp = await axios.post(`${API_BASE}/research`, {
-        symbol,
-        start,
-        end,
-        initial_capital: capital,
-        population_size: 8,
-        generations: 3,
-        seed: 42,
+      const response = await fetch('http://localhost:8000/research', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...form,
+          initial_capital: Number(form.initial_capital),
+        }),
       });
-      setResult(resp.data);
-    } catch (e) {
-      setError(e.response?.data?.detail || e.message);
+
+      if (!response.ok) {
+        const errData = await response.json().catch(() => ({}));
+        throw new Error(errData.detail || `HTTP ${response.status}`);
+      }
+
+      const result = await response.json();
+
+      if (result.equity_curve) setEquityData(result.equity_curve);
+      if (result.metrics) setMetrics(result.metrics);
+      if (result.strategies) setStrategies(result.strategies);
+      if (result.portfolio_value) setPortfolioValue(result.portfolio_value);
+
+      setShowForm(false);
+    } catch (err) {
+      setError(err.message || 'Research pipeline failed');
     } finally {
-      setLoading(false);
+      setIsLoading(false);
     }
-  }, [symbol, start, end, capital]);
+  };
 
-  // Derived data
-  const equityData = (result?.equity_curve || []).map((v, i) => ({ index: i, equity: v }));
-  const analytics  = result?.analytics || {};
-  const strategies = result?.ranking_results || [];
-  const bestGenome = result?.best_genome;
-  const portfolioValue = liveEquity ?? (equityData.length > 0 ? equityData[equityData.length - 1]?.equity : null);
+  const inputStyle = {
+    background: '#0d1117',
+    border: '1px solid #1f2937',
+    color: '#e2e8f0',
+    padding: '4px 8px',
+    fontFamily: 'Courier New, monospace',
+    fontSize: '12px',
+    borderRadius: '2px',
+    width: '140px',
+  };
 
-  // ---------------------------------------------------------------------------
-  // Sub-components
-  // ---------------------------------------------------------------------------
-
-  const TopBar = (
-    <>
-      <div className="flex items-center gap-3">
-        <div className={`w-2 h-2 rounded-full ${wsStatus === 'connected' ? 'bg-green-400 animate-pulse' : 'bg-red-500'}`} />
-        <span className="text-green-400 text-xs font-bold uppercase tracking-widest">
-          Bloomberg Terminal
-        </span>
-        <span className="text-gray-600 text-xs">|</span>
-        <span className="text-gray-400 text-xs">{symbol}</span>
-      </div>
-      <div className="flex items-center gap-6">
-        <div className="text-right">
-          <div className="text-gray-500 text-xs">Portfolio Value</div>
-          <div className="text-green-400 text-sm font-bold font-mono">
-            {formatCurrency(portfolioValue)}
-          </div>
-        </div>
-        <div className={`text-xs px-2 py-1 rounded border ${
-          wsStatus === 'connected'
-            ? 'border-green-700 text-green-400'
-            : 'border-red-700 text-red-400'
-        }`}>
-          {wsStatus.toUpperCase()}
-        </div>
-      </div>
-    </>
-  );
-
-  const Sidebar = (
-    <div className="p-4 space-y-4">
-      <div>
-        <h3 className="text-yellow-500 text-xs font-bold uppercase tracking-wider mb-3">Research</h3>
-        <div className="space-y-2">
-          <div>
-            <label className="text-gray-500 text-xs block mb-1">Symbol</label>
-            <input
-              className="w-full bg-gray-900 border border-green-900 text-green-400 text-xs px-2 py-1 rounded focus:outline-none focus:border-green-500"
-              value={symbol}
-              onChange={e => setSymbol(e.target.value.toUpperCase())}
-            />
-          </div>
-          <div>
-            <label className="text-gray-500 text-xs block mb-1">Start Date</label>
-            <input
-              type="date"
-              className="w-full bg-gray-900 border border-green-900 text-green-400 text-xs px-2 py-1 rounded focus:outline-none focus:border-green-500"
-              value={start}
-              onChange={e => setStart(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-gray-500 text-xs block mb-1">End Date</label>
-            <input
-              type="date"
-              className="w-full bg-gray-900 border border-green-900 text-green-400 text-xs px-2 py-1 rounded focus:outline-none focus:border-green-500"
-              value={end}
-              onChange={e => setEnd(e.target.value)}
-            />
-          </div>
-          <div>
-            <label className="text-gray-500 text-xs block mb-1">Capital ($)</label>
-            <input
-              type="number"
-              className="w-full bg-gray-900 border border-green-900 text-green-400 text-xs px-2 py-1 rounded focus:outline-none focus:border-green-500"
-              value={capital}
-              onChange={e => setCapital(Number(e.target.value))}
-            />
-          </div>
-          <button
-            onClick={handleResearch}
-            disabled={loading}
-            className={`w-full py-2 text-xs font-bold uppercase tracking-wider rounded border transition-colors ${
-              loading
-                ? 'border-gray-700 text-gray-600 cursor-not-allowed'
-                : 'border-green-600 text-green-400 hover:bg-green-900 cursor-pointer'
-            }`}
-          >
-            {loading ? '⟳ Running...' : '▶ Run Research'}
-          </button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="p-2 bg-red-950 border border-red-700 rounded text-red-400 text-xs">
-          {error}
-        </div>
-      )}
-
-      {result && (
-        <div className="space-y-1 text-xs">
-          <div className="text-gray-500 uppercase tracking-wider text-xs mb-1">Last Run</div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Candles</span>
-            <span className="text-green-400">{result.candle_count}</span>
-          </div>
-          <div className="flex justify-between">
-            <span className="text-gray-500">Best Fitness</span>
-            <span className="text-green-400">{result.best_fitness?.toFixed(4) ?? '—'}</span>
-          </div>
-        </div>
-      )}
-    </div>
-  );
-
-  const MainPanel = (
-    <div>
-      <EquityChart
-        data={equityData}
-        title={`${symbol} Portfolio Equity`}
-        initialValue={capital}
-      />
-      <StrategyTable strategies={strategies} bestGenome={bestGenome} />
-    </div>
-  );
-
-  const RightPanel = (
-    <div>
-      <h3 className="text-green-400 text-sm font-bold mb-4 uppercase tracking-wider">Analytics</h3>
-      <MetricsPanel analytics={analytics} />
-    </div>
-  );
+  const labelStyle = {
+    fontSize: '10px',
+    color: '#6b7280',
+    letterSpacing: '0.1em',
+    textTransform: 'uppercase',
+    marginBottom: '2px',
+    display: 'block',
+  };
 
   return (
-    <TerminalLayout
-      topBar={TopBar}
-      sidebar={Sidebar}
-      main={MainPanel}
-      rightPanel={RightPanel}
-    />
+    <div style={{ height: '100vh', overflow: 'hidden', background: '#0b0f14' }}>
+      {/* Collapsible Research Form */}
+      <div style={{
+        background: '#0d1117',
+        borderBottom: '1px solid #1f2937',
+        overflow: 'hidden',
+        transition: 'max-height 0.3s ease',
+        maxHeight: showForm ? '120px' : '32px',
+        flexShrink: 0,
+      }}>
+        {/* Form Toggle Header */}
+        <div
+          onClick={() => setShowForm(!showForm)}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            padding: '6px 16px',
+            cursor: 'pointer',
+            borderBottom: showForm ? '1px solid #1f2937' : 'none',
+            height: '32px',
+          }}
+        >
+          <span style={{ fontSize: '10px', color: '#9ca3af', letterSpacing: '0.1em' }}>
+            ▸ RESEARCH PARAMETERS
+          </span>
+          <span style={{ color: '#4b5563', fontSize: '12px' }}>
+            {showForm ? '▲' : '▼'}
+          </span>
+        </div>
+
+        {/* Form Fields */}
+        {showForm && (
+          <form onSubmit={handleRunResearch} style={{
+            display: 'flex',
+            alignItems: 'flex-end',
+            gap: '16px',
+            padding: '8px 16px',
+            flexWrap: 'wrap',
+          }}>
+            <div>
+              <label style={labelStyle}>Symbol</label>
+              <input style={inputStyle} name="symbol" value={form.symbol} onChange={handleFormChange} />
+            </div>
+            <div>
+              <label style={labelStyle}>Start Date</label>
+              <input style={inputStyle} name="start_date" value={form.start_date} onChange={handleFormChange} />
+            </div>
+            <div>
+              <label style={labelStyle}>End Date</label>
+              <input style={inputStyle} name="end_date" value={form.end_date} onChange={handleFormChange} />
+            </div>
+            <div>
+              <label style={labelStyle}>Capital ($)</label>
+              <input style={inputStyle} name="initial_capital" value={form.initial_capital} onChange={handleFormChange} type="number" />
+            </div>
+            <button
+              type="submit"
+              disabled={isLoading}
+              style={{
+                background: isLoading ? '#1f2937' : 'rgba(0, 255, 136, 0.1)',
+                border: '1px solid',
+                borderColor: isLoading ? '#374151' : '#00ff88',
+                color: isLoading ? '#4b5563' : '#00ff88',
+                padding: '4px 16px',
+                fontFamily: 'Courier New, monospace',
+                fontSize: '11px',
+                letterSpacing: '0.1em',
+                cursor: isLoading ? 'not-allowed' : 'pointer',
+                borderRadius: '2px',
+                height: '26px',
+              }}
+            >
+              {isLoading ? '◈ RUNNING...' : '▶ RUN RESEARCH'}
+            </button>
+          </form>
+        )}
+      </div>
+
+      {/* Terminal Layout */}
+      <div style={{ height: showForm ? 'calc(100vh - 120px)' : 'calc(100vh - 32px)', overflow: 'hidden' }}>
+        <TerminalLayout
+          equityData={equityData}
+          metrics={metrics}
+          strategies={strategies}
+          isLive={isLive}
+          portfolioValue={portfolioValue}
+          isLoading={isLoading}
+          error={error}
+        />
+      </div>
+    </div>
   );
 }
+
+export default App;

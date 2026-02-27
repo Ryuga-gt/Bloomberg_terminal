@@ -1,71 +1,109 @@
 import React from 'react';
 
-/**
- * Strategy ranking table.
- *
- * Props:
- *   strategies: array of ranking result objects
- *   bestGenome: genome dict of the best evolved strategy
- */
-const StrategyTable = ({ strategies = [], bestGenome = null }) => {
+const StrategyTable = ({ strategies }) => {
+  const data = strategies || [];
+
+  const headerStyle = {
+    padding: '6px 8px',
+    fontSize: '9px',
+    color: '#6b7280',
+    letterSpacing: '0.1em',
+    textTransform: 'uppercase',
+    borderBottom: '1px solid #1f2937',
+    background: '#0d1117',
+    position: 'sticky',
+    top: 0,
+    zIndex: 1,
+    fontFamily: 'Courier New, monospace',
+    whiteSpace: 'nowrap',
+  };
+
+  const cellStyle = {
+    padding: '5px 8px',
+    fontSize: '11px',
+    fontFamily: 'Courier New, monospace',
+    borderBottom: '1px solid rgba(31, 41, 55, 0.3)',
+    whiteSpace: 'nowrap',
+  };
+
   return (
-    <div className="bg-gray-950 border border-green-900 rounded p-4 mb-4">
-      <h3 className="text-green-400 text-sm font-bold mb-3 uppercase tracking-wider">
-        Strategy Rankings
-      </h3>
+    <div style={{ height: '100%', overflow: 'auto' }}>
+      <table style={{
+        width: '100%',
+        borderCollapse: 'collapse',
+        tableLayout: 'fixed',
+      }}>
+        <thead>
+          <tr>
+            <th style={{ ...headerStyle, width: '30px' }}>#</th>
+            <th style={{ ...headerStyle, width: 'auto', textAlign: 'left' }}>STRATEGY</th>
+            <th style={{ ...headerStyle, width: '55px', textAlign: 'right' }}>SHARPE</th>
+            <th style={{ ...headerStyle, width: '60px', textAlign: 'right' }}>RETURN</th>
+            <th style={{ ...headerStyle, width: '60px', textAlign: 'right' }}>DD%</th>
+            <th style={{ ...headerStyle, width: '55px', textAlign: 'right' }}>SCORE</th>
+          </tr>
+        </thead>
+        <tbody>
+          {data.length === 0 ? (
+            <tr>
+              <td colSpan={6} style={{
+                ...cellStyle,
+                textAlign: 'center',
+                color: '#4b5563',
+                padding: '20px',
+              }}>
+                NO DATA — RUN RESEARCH PIPELINE
+              </td>
+            </tr>
+          ) : (
+            data.map((row, idx) => {
+              const isTop = idx === 0;
+              const rowBg = isTop ? 'rgba(0, 255, 136, 0.05)' : 'transparent';
+              const rankColor = isTop ? '#00ff88' : '#9ca3af';
 
-      {/* Best Genome */}
-      {bestGenome && (
-        <div className="mb-3 p-2 bg-gray-900 border border-yellow-700 rounded text-xs">
-          <span className="text-yellow-500 font-bold">BEST EVOLVED: </span>
-          <span className="text-green-300">
-            {bestGenome.type?.toUpperCase()}
-            {bestGenome.short && ` (${bestGenome.short}/${bestGenome.long})`}
-            {bestGenome.period && ` (RSI ${bestGenome.period})`}
-            {bestGenome.window && ` (W${bestGenome.window})`}
-          </span>
-        </div>
-      )}
-
-      {strategies.length === 0 ? (
-        <p className="text-gray-600 text-xs">No strategies ranked yet.</p>
-      ) : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-xs">
-            <thead>
-              <tr className="border-b border-green-900">
-                <th className="text-left text-gray-500 py-1 pr-2">#</th>
-                <th className="text-left text-gray-500 py-1 pr-2">Strategy</th>
-                <th className="text-right text-gray-500 py-1 pr-2">Score</th>
-                <th className="text-right text-gray-500 py-1 pr-2">Sharpe</th>
-                <th className="text-right text-gray-500 py-1">MDD</th>
-              </tr>
-            </thead>
-            <tbody>
-              {strategies.map((s, i) => {
-                const score = s.composite_score ?? 0;
-                const sharpe = s.backtest?.sharpe_ratio ?? 0;
-                const mdd = s.backtest?.max_drawdown_pct ?? 0;
-                return (
-                  <tr key={i} className="border-b border-gray-900 hover:bg-gray-900">
-                    <td className="py-1 pr-2 text-yellow-500 font-bold">{s.rank ?? i + 1}</td>
-                    <td className="py-1 pr-2 text-green-300 truncate max-w-24">{s.strategy_name}</td>
-                    <td className={`py-1 pr-2 text-right font-mono ${score >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                      {score.toFixed(3)}
-                    </td>
-                    <td className={`py-1 pr-2 text-right font-mono ${sharpe >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                      {sharpe.toFixed(3)}
-                    </td>
-                    <td className={`py-1 text-right font-mono ${mdd <= 0 ? 'text-red-400' : 'text-green-400'}`}>
-                      {(mdd * 100).toFixed(1)}%
-                    </td>
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
-      )}
+              return (
+                <tr key={idx} style={{ background: rowBg }}>
+                  <td style={{ ...cellStyle, color: rankColor, fontWeight: isTop ? 'bold' : 'normal', textAlign: 'center' }}>
+                    {isTop ? '★' : idx + 1}
+                  </td>
+                  <td style={{ ...cellStyle, color: isTop ? '#e2e8f0' : '#9ca3af', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {row.name || row.strategy_name || `Strategy ${idx + 1}`}
+                  </td>
+                  <td style={{
+                    ...cellStyle,
+                    textAlign: 'right',
+                    color: (row.sharpe || 0) > 1 ? '#00ff88' : (row.sharpe || 0) > 0 ? '#fbbf24' : '#ff4d4f',
+                  }}>
+                    {typeof row.sharpe === 'number' ? row.sharpe.toFixed(2) : '--'}
+                  </td>
+                  <td style={{
+                    ...cellStyle,
+                    textAlign: 'right',
+                    color: (row.return_pct || 0) >= 0 ? '#00ff88' : '#ff4d4f',
+                  }}>
+                    {typeof row.return_pct === 'number' ? `${row.return_pct.toFixed(1)}%` : '--'}
+                  </td>
+                  <td style={{
+                    ...cellStyle,
+                    textAlign: 'right',
+                    color: '#ff4d4f',
+                  }}>
+                    {typeof row.drawdown_pct === 'number' ? `${row.drawdown_pct.toFixed(1)}%` : '--'}
+                  </td>
+                  <td style={{
+                    ...cellStyle,
+                    textAlign: 'right',
+                    color: isTop ? '#00ff88' : '#9ca3af',
+                    fontWeight: isTop ? 'bold' : 'normal',
+                  }}>
+                    {typeof row.composite_score === 'number' ? row.composite_score.toFixed(2) : '--'}
+                  </td>
+                </tr>
+              );
+            })
+          )}
+        </tbody>
+      </table>
     </div>
   );
 };
