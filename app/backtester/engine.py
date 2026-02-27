@@ -8,6 +8,7 @@ class Backtester:
         buy_price = candles[0]["close"]
         sell_price = candles[-1]["close"]
         shares = self.initial_cash / buy_price
-        final_equity = shares * sell_price
+        equity_curve = [shares * c["close"] for c in candles]
+        final_equity = equity_curve[-1]
         return_pct = (final_equity - self.initial_cash) / self.initial_cash * 100
-        return {"final_equity": final_equity, "return_pct": return_pct}
+        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve}
