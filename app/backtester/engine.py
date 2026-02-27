@@ -6,11 +6,20 @@ class Backtester:
         self.initial_cash = initial_cash
 
     def run(self, candles: list[dict], mode: str = "buy_and_hold",
-            transaction_cost_pct: float = 0.0, slippage_pct: float = 0.0) -> dict:
+            transaction_cost_pct: float = 0.0, slippage_pct: float = 0.0,
+            strategy=None) -> dict:
         if len(candles) < 2:
             raise ValueError("buy_and_hold requires at least 2 candles")
-        buy_price = candles[0]["close"] * (1 + slippage_pct / 100)
-        sell_price = candles[-1]["close"] * (1 - slippage_pct / 100)
+        if strategy is not None:
+            signals = strategy.generate(candles)
+            buy_idx = next(i for i, s in enumerate(signals) if s == "BUY")
+            raw_buy  = candles[buy_idx]["close"]
+            raw_sell = candles[-1]["close"]
+        else:
+            raw_buy  = candles[0]["close"]
+            raw_sell = candles[-1]["close"]
+        buy_price = raw_buy  * (1 + slippage_pct / 100)
+        sell_price = raw_sell * (1 - slippage_pct / 100)
         cash_after_entry_cost = self.initial_cash * (1 - transaction_cost_pct / 100)
         shares = cash_after_entry_cost / buy_price
         equity_curve = [shares * c["close"] for c in candles]
