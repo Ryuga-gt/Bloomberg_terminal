@@ -1,3 +1,4 @@
+import math
 import pytest
 
 from app.backtester.engine import Backtester
@@ -199,3 +200,32 @@ def test_returns_series_third_element():
     result = bt.run(CANDLES_3, mode="buy_and_hold")
     # (1100 - 1050) / 1050 = 1/21 — not exactly representable, use approx
     assert result["returns_series"][2] == pytest.approx(1 / 21, rel=1e-9)
+
+
+# ---------------------------------------------------------------------------
+# volatility_pct
+# RED: run() does not return volatility_pct key yet →
+#      KeyError: 'volatility_pct'
+#
+# Definition: sample std dev of returns_series × 100
+#   mean = sum(r) / n
+#   variance = sum((r - mean)²) / (n - 1)   ← Bessel-corrected
+#   volatility_pct = sqrt(variance) * 100
+#
+# For CANDLES_3 returns = [0.0, 0.05, 1/21]:
+#   All irrational in binary float → pytest.approx required
+# ---------------------------------------------------------------------------
+
+def test_volatility_pct_equals_sample_std_dev_of_returns_times_100():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_3, mode="buy_and_hold")
+
+    # Compute expected value with same formula the implementation must use
+    r = result["returns_series"]                     # [0.0, 0.05, 1/21]
+    n = len(r)
+    mean = sum(r) / n
+    variance = sum((x - mean) ** 2 for x in r) / (n - 1)
+    expected_volatility_pct = math.sqrt(variance) * 100
+
+    # KeyError: 'volatility_pct' — feature missing → RED
+    assert result["volatility_pct"] == pytest.approx(expected_volatility_pct, rel=1e-9)
