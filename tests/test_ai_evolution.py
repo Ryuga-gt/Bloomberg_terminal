@@ -359,3 +359,56 @@ def test_fitness_always_finite_float():
         assert isinstance(score, float)
         assert not math.isnan(score)
         assert score != -999.0
+
+
+# ===========================================================================
+# Part 7 — Inactive strategy penalty: flat < profitable
+# ===========================================================================
+
+def test_flat_strategy_scores_lower_than_profitable():
+    """
+    A strategy that never trades (flat) must score lower than one that
+    produces a positive return on rising candles.
+    """
+    from ai.strategy_genome import genome_to_strategy_class
+
+    # Rising candles: MA(5,10) will fire a BUY and produce positive return
+    rising_candles = make_candles(50, start=100.0, step=2.0)
+    evaluator = FitnessEvaluator(rising_candles, mode="fast")
+
+    # Active strategy: MA with short window on rising prices → should trade
+    active_genome = {"type": "moving_average", "short": 5, "long": 10}
+    active_score = evaluator.evaluate(active_genome)
+
+    # Flat strategy: MA with very long window that never fires on 50 candles
+    # long=200 means it needs 200 candles before it can generate a signal
+    flat_genome = {"type": "moving_average", "short": 50, "long": 200}
+    flat_score = evaluator.evaluate(flat_genome)
+
+    # Flat strategy must score lower (penalised)
+    assert flat_score < active_score, (
+        f"Expected flat_score ({flat_score}) < active_score ({active_score})"
+    )
+
+
+def test_inactive_strategy_gets_penalty():
+    """A strategy that never trades must receive the inactivity penalty."""
+    from ai.fitness_evaluator import _ZERO_TRADE_PENALTY
+
+    # Very long MA window — will never fire on 50 candles
+    rising_candles = make_candles(50, start=100.0, step=2.0)
+    evaluator = FitnessEvaluator(rising_candles, mode="fast")
+    flat_genome = {"type": "moving_average", "short": 50, "long": 200}
+    score = evaluator.evaluate(flat_genome)
+    assert score == _ZERO_TRADE_PENALTY
+
+
+def test_active_strategy_does_not_get_penalty():
+    """A strategy that trades must NOT receive the inactivity penalty."""
+    from ai.fitness_evaluator import _ZERO_TRADE_PENALTY
+
+    rising_candles = make_candles(50, start=100.0, step=2.0)
+    evaluator = FitnessEvaluator(rising_candles, mode="fast")
+    active_genome = {"type": "moving_average", "short": 5, "long": 10}
+    score = evaluator.evaluate(active_genome)
+    assert score != _ZERO_TRADE_PENALTY

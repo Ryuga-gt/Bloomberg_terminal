@@ -32,8 +32,9 @@ from ai.strategy_genome import genome_to_strategy_class
 from app.backtester.engine import Backtester
 
 
-# Penalty for strategies that produce no trades or invalid analytics
-_ZERO_TRADE_PENALTY = -10.0
+# Penalty for inactive strategies (zero trades or near-zero return).
+# Must be strongly negative so the evolution engine avoids flat strategies.
+_ZERO_TRADE_PENALTY = -100.0
 
 
 class FitnessEvaluator:
@@ -96,8 +97,11 @@ class FitnessEvaluator:
         """
         Lightweight fitness: sharpe - abs(max_drawdown) * 0.5
 
-        Negative Sharpe is valid and returned as-is.
-        Only penalises strategies that produce zero trades or NaN metrics.
+        Inactive strategies (zero trades or near-zero return) are penalised
+        with _ZERO_TRADE_PENALTY (-100) to prevent the evolution engine from
+        selecting flat strategies that avoid risk by never trading.
+
+        Negative Sharpe is valid and returned as-is for active strategies.
         """
         bt = Backtester(self._initial_cash)
         try:
@@ -106,17 +110,24 @@ class FitnessEvaluator:
                 strategy=strategy_class(),
             )
         except Exception:
-            # Backtester raised — penalise but not with -999
             return _ZERO_TRADE_PENALTY
 
-        sharpe = result.get("sharpe_ratio", 0.0)
-        mdd    = result.get("max_drawdown_pct", 0.0)
+        sharpe     = result.get("sharpe_ratio", 0.0)
+        mdd        = result.get("max_drawdown_pct", 0.0)
+        return_pct = result.get("return_pct", 0.0)
 
         # Guard against NaN / None
         if sharpe is None or (isinstance(sharpe, float) and math.isnan(sharpe)):
             sharpe = 0.0
         if mdd is None or (isinstance(mdd, float) and math.isnan(mdd)):
             mdd = 0.0
+        if return_pct is None or (isinstance(return_pct, float) and math.isnan(return_pct)):
+            return_pct = 0.0
+
+        # Penalise inactive strategies: if total return is near zero,
+        # the strategy never traded (or traded but had no effect).
+        if abs(float(return_pct)) < 0.01:
+            return _ZERO_TRADE_PENALTY
 
         fitness = float(sharpe) - abs(float(mdd)) * 0.5
         assert not math.isnan(fitness), f"fitness is NaN: sharpe={sharpe}, mdd={mdd}"
