@@ -102,3 +102,56 @@ def test_backtester_max_drawdown_pct_zero_when_monotonic():
     result = bt.run(CANDLES_3, mode="buy_and_hold")
     # equity_curve = [1000, 1050, 1100] — never drops → drawdown = 0.0
     assert result["max_drawdown_pct"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# transaction_cost_pct + slippage_pct
+# RED: run() does not accept these kwargs yet →
+#      TypeError: run() got an unexpected keyword argument 'transaction_cost_pct'
+#
+# Formula (same arithmetic the implementation must follow):
+#   effective_buy  = close[0] * (1 + slippage_pct / 100)
+#   cash_after_entry_cost = initial_cash * (1 - transaction_cost_pct / 100)
+#   shares = cash_after_entry_cost / effective_buy
+#   effective_sell = close[-1] * (1 - slippage_pct / 100)
+#   gross_exit     = shares * effective_sell
+#   final_equity   = gross_exit * (1 - transaction_cost_pct / 100)
+# ---------------------------------------------------------------------------
+
+def test_backtester_transaction_cost_and_slippage_reduce_final_equity():
+    initial_cash        = 1000.0
+    transaction_cost_pct = 1.0
+    slippage_pct         = 1.0
+    raw_buy_price        = CANDLES[0]["close"]   # 100.0
+    raw_sell_price       = CANDLES[-1]["close"]  # 110.0
+
+    # Expected — computed with same formula the implementation must use
+    effective_buy        = raw_buy_price  * (1 + slippage_pct / 100)          # 101.0
+    cash_after_entry_cost = initial_cash  * (1 - transaction_cost_pct / 100)  # 990.0
+    shares               = cash_after_entry_cost / effective_buy               # 990/101
+    effective_sell       = raw_sell_price * (1 - slippage_pct / 100)          # 108.9
+    gross_exit           = shares * effective_sell
+    expected_final_equity = gross_exit * (1 - transaction_cost_pct / 100)
+
+    bt = Backtester(initial_cash=initial_cash)
+    result = bt.run(
+        CANDLES,
+        mode="buy_and_hold",
+        transaction_cost_pct=transaction_cost_pct,
+        slippage_pct=slippage_pct,
+    )
+    assert result["final_equity"] == expected_final_equity
+
+
+def test_backtester_zero_costs_matches_no_cost_result():
+    """Passing explicit zeros must reproduce the original no-cost behaviour."""
+    bt_plain = Backtester(initial_cash=1000)
+    bt_zeros = Backtester(initial_cash=1000)
+    plain  = bt_plain.run(CANDLES, mode="buy_and_hold")
+    zeroed = bt_zeros.run(
+        CANDLES,
+        mode="buy_and_hold",
+        transaction_cost_pct=0.0,
+        slippage_pct=0.0,
+    )
+    assert zeroed["final_equity"] == plain["final_equity"]
