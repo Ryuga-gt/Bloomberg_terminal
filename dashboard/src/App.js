@@ -114,10 +114,28 @@ function App() {
 
       const result = await response.json();
 
-      if (result.equity_curve) setEquityData(result.equity_curve);
-      if (result.metrics) setMetrics(result.metrics);
-      if (result.strategies) setStrategies(result.strategies);
-      if (result.portfolio_value) setPortfolioValue(result.portfolio_value);
+      // Map equity_curve: API returns List[float], chart expects [{date, value}]
+      if (result.equity_curve && result.equity_curve.length > 0) {
+        const mapped = result.equity_curve.map((v, i) => ({ date: `T${i}`, value: v }));
+        setEquityData(mapped);
+        setPortfolioValue(result.equity_curve[result.equity_curve.length - 1]);
+      }
+
+      // Map analytics → metrics (API field is 'analytics', component reads 'metrics')
+      if (result.analytics) setMetrics(result.analytics);
+
+      // Map ranking_results → strategies (API field is 'ranking_results', component reads 'strategies')
+      if (result.ranking_results && result.ranking_results.length > 0) {
+        const mappedStrategies = result.ranking_results.map((r, i) => ({
+          name: r.strategy_name || `Strategy ${i + 1}`,
+          sharpe: r.backtest?.sharpe_ratio ?? r.sharpe ?? null,
+          return_pct: r.backtest?.return_pct ?? r.return_pct ?? null,
+          drawdown_pct: r.backtest?.max_drawdown_pct ?? r.drawdown_pct ?? null,
+          composite_score: r.composite_score ?? null,
+          rank: r.rank ?? i + 1,
+        }));
+        setStrategies(mappedStrategies);
+      }
 
       setShowForm(false);
     } catch (err) {

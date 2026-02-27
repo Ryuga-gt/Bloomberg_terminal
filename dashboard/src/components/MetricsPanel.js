@@ -52,7 +52,7 @@ const MetricsPanel = ({ metrics }) => {
       <MetricRow label="SHARPE RATIO" value={m.sharpe} format="sharpe" />
       <MetricRow label="SORTINO RATIO" value={m.sortino} format="sortino" />
       <MetricRow label="MAX DRAWDOWN" value={m.max_drawdown} format="drawdown" suffix="%" />
-      <MetricRow label="VAR 95%" value={m.var_95} format="var" suffix="%" />
+      <MetricRow label="VAR 95%" value={m.var_95_hist ?? m.var_95} format="var" suffix="%" />
       <MetricRow label="VOLATILITY" value={m.volatility} format="number" suffix="%" />
       <MetricRow label="WIN RATE" value={m.win_rate} format="return" suffix="%" />
       <MetricRow label="PROFIT FACTOR" value={m.profit_factor} format="sharpe" />
