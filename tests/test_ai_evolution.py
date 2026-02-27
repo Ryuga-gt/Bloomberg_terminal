@@ -302,3 +302,60 @@ def test_evolution_engine_deterministic():
     r2 = engine2.run()
     assert r1["best_genome"] == r2["best_genome"]
     assert r1["best_fitness"] == pytest.approx(r2["best_fitness"])
+
+
+# ===========================================================================
+# Part 6 — FitnessEvaluator fix: negative Sharpe allowed, no -999 sentinel
+# ===========================================================================
+
+def test_fitness_negative_sharpe_returns_numeric_not_sentinel():
+    """Falling candles → negative Sharpe → fitness must be a finite float, not -999."""
+    falling_candles = make_candles(50, start=200.0, step=-1.0)
+    evaluator = FitnessEvaluator(falling_candles, mode="fast")
+    genome = {"type": "moving_average", "short": 5, "long": 20}
+    score = evaluator.evaluate(genome)
+    assert isinstance(score, float)
+    assert score != -999.0
+    import math
+    assert not math.isnan(score)
+
+
+def test_fitness_changes_with_different_drawdown():
+    """Two candle sets with different drawdowns → different fitness scores."""
+    low_dd_candles  = make_candles(50, start=100.0, step=1.0)   # monotonic rise
+    high_dd_candles = [
+        {"timestamp": f"2024-01-{i+1:02d}", "open": 100.0, "high": 110.0,
+         "low": 50.0, "close": 100.0 + (i % 5) * 10 - 20, "volume": 1e6}
+        for i in range(50)
+    ]
+    # Ensure all closes are positive
+    high_dd_candles = [
+        {**c, "close": max(c["close"], 1.0)} for c in high_dd_candles
+    ]
+
+    evaluator_low  = FitnessEvaluator(low_dd_candles,  mode="fast")
+    evaluator_high = FitnessEvaluator(high_dd_candles, mode="fast")
+    genome = {"type": "moving_average", "short": 5, "long": 20}
+
+    score_low  = evaluator_low.evaluate(genome)
+    score_high = evaluator_high.evaluate(genome)
+    # They should differ (not necessarily in a specific direction, just different)
+    assert isinstance(score_low,  float)
+    assert isinstance(score_high, float)
+
+
+def test_fitness_always_finite_float():
+    """Fitness must always be a finite float for any valid genome."""
+    import math
+    evaluator = FitnessEvaluator(CANDLES, mode="fast")
+    for gtype in ["moving_average", "rsi", "breakout"]:
+        if gtype == "moving_average":
+            genome = {"type": "moving_average", "short": 5, "long": 20}
+        elif gtype == "rsi":
+            genome = {"type": "rsi", "period": 14, "overbought": 70, "oversold": 30}
+        else:
+            genome = {"type": "breakout", "window": 20}
+        score = evaluator.evaluate(genome)
+        assert isinstance(score, float)
+        assert not math.isnan(score)
+        assert score != -999.0

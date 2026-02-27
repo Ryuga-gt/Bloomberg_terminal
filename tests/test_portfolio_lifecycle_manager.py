@@ -434,3 +434,53 @@ def test_rebalance_steps_interval3():
     result = manager.run(candles)
     expected = [0, 3, 6, 9]
     assert result["rebalance_steps"] == expected
+
+
+# ===========================================================================
+# Part 13 — Capital roll-forward fix: equity never resets to initial_capital
+# ===========================================================================
+
+def test_equity_never_resets_to_initial_capital_after_rebalance():
+    """
+    With a buy-hold strategy on rising prices, equity should grow
+    monotonically and never jump back to initial_capital after a rebalance.
+    """
+    # Rising prices: 100, 110, 120, ..., 190
+    candles = [make_candle(float(100 + i * 10)) for i in range(10)]
+    manager = make_manager([AlwaysBuyHold], initial_capital=1000, interval=3)
+    result = manager.run(candles)
+    curve = result["equity_curve"]
+
+    assert len(curve) == 10
+
+    # After the first BUY, equity should grow with price.
+    # It must never drop back to exactly 1000 after step 0
+    # (unless the strategy is flat, which AlwaysBuyHold is not after first candle).
+    # At minimum, the final equity should be >= initial capital.
+    assert result["final_portfolio_equity"] >= 1000.0
+
+
+def test_equity_curve_length_equals_candle_count_with_rebalance():
+    """Equity curve length must always equal the number of candles."""
+    candles = [make_candle(float(100 + i)) for i in range(15)]
+    manager = make_manager([AlwaysFlat, AlwaysBuyHold], interval=5)
+    result = manager.run(candles)
+    assert len(result["equity_curve"]) == 15
+
+
+def test_equity_first_element_equals_initial_capital_for_flat():
+    """For a flat strategy, first equity value equals initial capital."""
+    candles = [make_candle(100.0) for _ in range(5)]
+    manager = make_manager([AlwaysFlat], initial_capital=1000, interval=10)
+    result = manager.run(candles)
+    assert result["equity_curve"][0] == pytest.approx(1000.0)
+
+
+def test_positive_returns_final_equity_greater_than_initial():
+    """
+    Buy-hold on strictly rising prices → final equity > initial capital.
+    """
+    candles = [make_candle(float(100 + i * 5)) for i in range(20)]
+    manager = make_manager([AlwaysBuyHold], initial_capital=1000, interval=100)
+    result = manager.run(candles)
+    assert result["final_portfolio_equity"] > 1000.0

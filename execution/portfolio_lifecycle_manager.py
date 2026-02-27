@@ -121,12 +121,12 @@ class PortfolioLifecycleManager:
         disabled_names: list = []
         rebalance_steps: list = []
 
-        # Current portfolio engine and its equity curve
-        # We start with equal allocation over all strategies.
-        current_engine = PortfolioEngine(
+        # Current portfolio engine — starts with equal allocation.
+        current_engine = _WeightedPortfolioEngine(
             strategies=active_strategies,
+            weights={cls.__name__: 1.0 / len(active_strategies)
+                     for cls in active_strategies},
             initial_capital=self._initial_capital,
-            allocation="equal",
         )
 
         equity_curve: list = []
@@ -181,18 +181,16 @@ class PortfolioLifecycleManager:
                                    for cls in active_strategies}
 
                     # --- 5. Re-instantiate PortfolioEngine ---
-                    # Distribute capital according to weights
-                    # PortfolioEngine only supports "equal" allocation
-                    # internally, so we pass weighted capital per strategy
-                    # by creating individual engines and summing.
-                    # However, PortfolioEngine splits equally by design.
-                    # We implement weighted allocation by running separate
-                    # PortfolioEngine instances per strategy with their
-                    # respective capital share, then aggregate.
+                    # Use CURRENT portfolio equity as the new capital base
+                    # so that equity rolls forward continuously.
+                    current_equity = (
+                        equity_curve[-1] if equity_curve
+                        else self._initial_capital
+                    )
                     current_engine = _WeightedPortfolioEngine(
                         strategies=active_strategies,
                         weights=weights,
-                        initial_capital=self._initial_capital,
+                        initial_capital=current_equity,
                     )
 
             # --- Feed current candle to the current engine ---

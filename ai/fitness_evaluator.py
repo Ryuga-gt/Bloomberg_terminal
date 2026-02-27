@@ -5,22 +5,19 @@ ai.fitness_evaluator
 Fitness evaluator for strategy genomes.
 
 Converts a genome to a strategy class, runs it through the backtester
-and analytics layer, and returns a scalar fitness score.
+and returns a scalar fitness score.
 
-Fitness score
--------------
-The fitness score is the composite score from the existing
-``StrategyRankingEngine``, which combines:
+Fitness formula (fast mode)
+---------------------------
+    fitness = sharpe_ratio - abs(max_drawdown_pct) * 0.5
 
-    1.0 * sharpe_ratio
-  + 0.8 * calmar_ratio
-  + 1.2 * stability_score
-  + 1.5 * robustness_score
-  - 1.0 * abs(max_drawdown_pct)
-  - 1.0 * abs(performance_decay)
-
-For speed in the evolution loop, a lightweight fitness function is also
-provided that uses only the backtester (no Monte Carlo / walk-forward).
+Rules
+-----
+* Negative Sharpe is allowed — it is NOT penalised with a sentinel value.
+* Only truly invalid results (NaN, None, or backtester exception with
+  zero trades) receive a penalty.
+* The penalty for zero-trade strategies is -10.0 (not -999).
+* fitness is always a finite float.
 
 Usage
 -----
@@ -29,10 +26,14 @@ Usage
 """
 
 import copy
+import math
 
 from ai.strategy_genome import genome_to_strategy_class
 from app.backtester.engine import Backtester
-from analytics.risk_metrics import RiskMetrics
+
+
+# Penalty for strategies that produce no trades or invalid analytics
+_ZERO_TRADE_PENALTY = -10.0
 
 
 class FitnessEvaluator:
@@ -46,7 +47,7 @@ class FitnessEvaluator:
     initial_cash : float, optional
         Starting cash for the backtester.  Default 1000.
     mode : str, optional
-        ``"fast"`` — uses only Backtester + RiskMetrics (O(n)).
+        ``"fast"`` — uses only Backtester (O(n)).
         ``"full"`` — uses StrategyRankingEngine (slower, more accurate).
         Default ``"fast"``.
 
@@ -82,7 +83,7 @@ class FitnessEvaluator:
         Returns
         -------
         float
-            Fitness score.  Higher is better.
+            Fitness score.  Higher is better.  Always a finite float.
         """
         strategy_class = genome_to_strategy_class(genome)
 
@@ -92,7 +93,12 @@ class FitnessEvaluator:
             return self._full_fitness(strategy_class)
 
     def _fast_fitness(self, strategy_class: type) -> float:
-        """Lightweight fitness: Sharpe + Calmar - abs(max_drawdown)."""
+        """
+        Lightweight fitness: sharpe - abs(max_drawdown) * 0.5
+
+        Negative Sharpe is valid and returned as-is.
+        Only penalises strategies that produce zero trades or NaN metrics.
+        """
         bt = Backtester(self._initial_cash)
         try:
             result = bt.run(
@@ -100,13 +106,28 @@ class FitnessEvaluator:
                 strategy=strategy_class(),
             )
         except Exception:
-            return -999.0
+            # Backtester raised — penalise but not with -999
+            return _ZERO_TRADE_PENALTY
 
-        sharpe  = result.get("sharpe_ratio", 0.0)
-        calmar  = result.get("calmar_ratio", 0.0)
-        mdd     = result.get("max_drawdown_pct", 0.0)
+        sharpe = result.get("sharpe_ratio", 0.0)
+        mdd    = result.get("max_drawdown_pct", 0.0)
 
-        return 1.0 * sharpe + 0.8 * calmar - 1.0 * abs(mdd)
+        # Guard against NaN / None
+        if sharpe is None or (isinstance(sharpe, float) and math.isnan(sharpe)):
+            sharpe = 0.0
+        if mdd is None or (isinstance(mdd, float) and math.isnan(mdd)):
+            mdd = 0.0
+
+        # Penalise zero-trade strategies (equity never changed)
+        equity_curve = result.get("equity_curve", [])
+        if len(equity_curve) >= 2:
+            if equity_curve[0] == equity_curve[-1]:
+                # No PnL at all — mild penalty
+                return _ZERO_TRADE_PENALTY
+
+        fitness = float(sharpe) - abs(float(mdd)) * 0.5
+        assert not math.isnan(fitness), f"fitness is NaN: sharpe={sharpe}, mdd={mdd}"
+        return fitness
 
     def _full_fitness(self, strategy_class: type) -> float:
         """Full fitness using StrategyRankingEngine composite score."""
@@ -122,6 +143,9 @@ class FitnessEvaluator:
                 simulations=20,
             )
             results = engine.run()
-            return results[0]["composite_score"]
+            score = results[0]["composite_score"]
+            if score is None or (isinstance(score, float) and math.isnan(score)):
+                return _ZERO_TRADE_PENALTY
+            return float(score)
         except Exception:
-            return -999.0
+            return _ZERO_TRADE_PENALTY
