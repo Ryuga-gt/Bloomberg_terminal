@@ -130,9 +130,11 @@ def walk_forward_analysis(
     mean_train_sharpe = sum(train_sharpes) / n
     mean_test_sharpe  = sum(test_sharpes)  / n
 
-    # Bessel-corrected sample variance: divide by (n - 1)
+    # Bessel-corrected sample variance: divide by (n - 1).
+    # With only one window the variance is undefined; return 0.0.
     test_sharpe_variance = (
         sum((s - mean_test_sharpe) ** 2 for s in test_sharpes) / (n - 1)
+        if n > 1 else 0.0
     )
 
     performance_decay = mean_test_sharpe - mean_train_sharpe
