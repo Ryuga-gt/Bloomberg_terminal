@@ -2,6 +2,22 @@
 ai.strategy_genome
 ==================
 
+Note on strategy interfaces
+---------------------------
+The existing ``Backtester`` (``app.backtester.engine``) calls
+``strategy.generate(candles) -> list[str]`` (batch interface).
+
+The ``ExecutionGateway`` calls
+``strategy.generate_signal(candle) -> str`` (streaming interface).
+
+All strategy classes produced by :func:`genome_to_strategy_class` expose
+**both** interfaces:
+
+* ``generate_signal(candle)`` — stateful, one candle at a time.
+* ``generate(candles)``       — calls ``generate_signal`` for each candle
+  in sequence and returns the full signal list.
+
+
 Strategy genome representation and strategy class factory.
 
 A genome is a dict describing a trading strategy's parameters:
@@ -150,6 +166,10 @@ def _make_ma_strategy(short: int, long_: int) -> type:
                 return "SELL"
             return "HOLD"
 
+        def generate(self, candles: list) -> list:
+            """Batch interface for Backtester compatibility."""
+            return [self.generate_signal(c) for c in candles]
+
     MovingAverageStrategy.__name__ = f"MA_{short}_{long_}"
     MovingAverageStrategy.__qualname__ = MovingAverageStrategy.__name__
     return MovingAverageStrategy
@@ -192,6 +212,10 @@ def _make_rsi_strategy(period: int, overbought: int, oversold: int) -> type:
                 return "SELL"
             return "HOLD"
 
+        def generate(self, candles: list) -> list:
+            """Batch interface for Backtester compatibility."""
+            return [self.generate_signal(c) for c in candles]
+
     RSIStrategy.__name__ = f"RSI_{period}_{overbought}_{oversold}"
     RSIStrategy.__qualname__ = RSIStrategy.__name__
     return RSIStrategy
@@ -225,6 +249,10 @@ def _make_breakout_strategy(window: int) -> type:
                 self._position = "FLAT"
                 return "SELL"
             return "HOLD"
+
+        def generate(self, candles: list) -> list:
+            """Batch interface for Backtester compatibility."""
+            return [self.generate_signal(c) for c in candles]
 
     BreakoutStrategy.__name__ = f"Breakout_{window}"
     BreakoutStrategy.__qualname__ = BreakoutStrategy.__name__
