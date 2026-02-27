@@ -274,3 +274,40 @@ def test_sharpe_ratio_zero_when_volatility_is_zero():
     result = bt.run(CANDLES_FLAT, mode="buy_and_hold")
     # returns = [0.0, 0.0] → std_dev = 0.0 → sharpe must be 0.0, not ZeroDivisionError
     assert result["sharpe_ratio"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# calmar_ratio
+# RED: run() does not return calmar_ratio key yet →
+#      KeyError: 'calmar_ratio'
+#
+# Definition:
+#   calmar_ratio = return_pct / abs(max_drawdown_pct)
+#   if max_drawdown_pct == 0.0 → calmar_ratio = 0.0
+#
+# For CANDLES_4 closes=[100, 120, 90, 130], initial_cash=1000:
+#   shares        = 10.0
+#   final_equity  = 1300.0
+#   return_pct    = 30.0
+#   equity_curve  = [1000, 1200, 900, 1300]
+#   max_drawdown_pct = -25.0
+#   calmar_ratio  = 30.0 / 25.0 = 1.2
+# ---------------------------------------------------------------------------
+
+def test_calmar_ratio_normal():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_4, mode="buy_and_hold")
+    # Verify the intermediate values the calmar depends on
+    assert result["return_pct"] == 30.0
+    assert result["max_drawdown_pct"] == -25.0
+    # KeyError: 'calmar_ratio' — feature missing → RED
+    assert result["calmar_ratio"] == pytest.approx(1.2)
+
+
+def test_calmar_ratio_zero_when_no_drawdown():
+    bt = Backtester(initial_cash=1000)
+    result = bt.run(CANDLES_3, mode="buy_and_hold")
+    # equity_curve = [1000, 1050, 1100] — monotonic → max_drawdown_pct = 0.0
+    # → calmar must be 0.0, not ZeroDivisionError
+    assert result["max_drawdown_pct"] == 0.0
+    assert result["calmar_ratio"] == 0.0
