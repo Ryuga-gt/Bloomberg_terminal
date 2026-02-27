@@ -38,4 +38,5 @@ class Backtester:
             volatility_pct = math.sqrt(variance) * 100
         std_dev = volatility_pct / 100
         sharpe_ratio = mean_return / std_dev if std_dev != 0.0 else 0.0
-        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve, "max_drawdown_pct": max_drawdown_pct, "returns_series": returns_series, "volatility_pct": volatility_pct, "sharpe_ratio": sharpe_ratio}
+        calmar_ratio = return_pct / abs(max_drawdown_pct) if max_drawdown_pct != 0.0 else 0.0
+        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve, "max_drawdown_pct": max_drawdown_pct, "returns_series": returns_series, "volatility_pct": volatility_pct, "sharpe_ratio": sharpe_ratio, "calmar_ratio": calmar_ratio}
