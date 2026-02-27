@@ -137,19 +137,53 @@ def run_full_pipeline(
     if not top_strategies:
         top_strategies = [genome_to_strategy_class(best_genome)]
 
-    # 4. Rank strategies
+    # 4. Rank strategies — always use backtester for real metrics first,
+    #    then try StrategyRankingEngine for full composite score.
+    from app.backtester.engine import Backtester as _BT
+
+    def _bt_rank(strategies, candles, initial_cash):
+        """Build ranking results directly from Backtester."""
+        results = []
+        for i, cls in enumerate(strategies):
+            bt = _BT(initial_cash / len(strategies))
+            try:
+                r = bt.run([copy.copy(c) for c in candles], strategy=cls())
+                sharpe = r.get("sharpe_ratio", 0.0) or 0.0
+                calmar = r.get("calmar_ratio", 0.0) or 0.0
+                mdd    = r.get("max_drawdown_pct", 0.0) or 0.0
+                ret    = r.get("return_pct", 0.0) or 0.0
+                score  = sharpe - abs(mdd) * 0.5
+            except Exception:
+                sharpe = calmar = mdd = ret = score = 0.0
+            results.append({
+                "strategy_name":   cls.__name__,
+                "backtest":        {"return_pct": ret, "sharpe_ratio": sharpe,
+                                    "calmar_ratio": calmar, "max_drawdown_pct": mdd},
+                "stability":       {"stability_score": 0.0},
+                "walk_forward":    {"mean_test_sharpe": 0.0, "performance_decay": 0.0},
+                "monte_carlo":     {"mean_sharpe": 0.0, "sharpe_variance": 0.0,
+                                    "probability_of_loss": 0.5},
+                "robustness":      0.0,
+                "composite_score": score,
+                "rank":            i + 1,
+            })
+        results.sort(key=lambda r: r["composite_score"], reverse=True)
+        for i, r in enumerate(results):
+            r["rank"] = i + 1
+        return results
+
+    # Always start with backtester-based ranking (guaranteed to work)
+    ranking_results = _bt_rank(top_strategies, candles, initial_capital)
+
+    # Try to upgrade to full StrategyRankingEngine composite score
     n = len(candles)
-    # Use smaller windows to ensure at least 2 walk-forward folds
     train_size = max(10, min(n // 5, 50))
     test_size  = max(5,  min(n // 10, 25))
     step_size  = max(5,  min(n // 10, 25))
-
-    # Ensure train+test fits within candle count
     while train_size + test_size > n and train_size > 10:
         train_size = max(10, train_size - 5)
         test_size  = max(5,  test_size  - 2)
 
-    ranking_results = []
     try:
         ranking_engine = StrategyRankingEngine(
             strategies=top_strategies,
@@ -161,50 +195,12 @@ def run_full_pipeline(
             simulations=10,
             seed=seed,
         )
-        ranking_results = ranking_engine.run()
+        full_results = ranking_engine.run()
+        # Only use full results if they have non-trivial composite scores
+        if any(abs(r["composite_score"]) > 0.001 for r in full_results):
+            ranking_results = full_results
     except Exception:
-        # Fallback: build minimal ranking results from backtester only
-        from app.backtester.engine import Backtester
-        for i, cls in enumerate(top_strategies):
-            bt = Backtester(initial_capital / len(top_strategies))
-            try:
-                bt_result = bt.run(
-                    [copy.copy(c) for c in candles],
-                    strategy=cls(),
-                )
-                ranking_results.append({
-                    "strategy_name":   cls.__name__,
-                    "backtest":        {
-                        "return_pct":       bt_result.get("return_pct", 0.0),
-                        "sharpe_ratio":     bt_result.get("sharpe_ratio", 0.0),
-                        "calmar_ratio":     bt_result.get("calmar_ratio", 0.0),
-                        "max_drawdown_pct": bt_result.get("max_drawdown_pct", 0.0),
-                    },
-                    "stability":       {"stability_score": 0.0},
-                    "walk_forward":    {"mean_test_sharpe": 0.0, "performance_decay": 0.0},
-                    "monte_carlo":     {"mean_sharpe": 0.0, "sharpe_variance": 0.0,
-                                       "probability_of_loss": 0.5},
-                    "robustness":      0.0,
-                    "composite_score": bt_result.get("sharpe_ratio", 0.0),
-                    "rank":            i + 1,
-                })
-            except Exception:
-                ranking_results.append({
-                    "strategy_name":   cls.__name__,
-                    "backtest":        {"return_pct": 0.0, "sharpe_ratio": 0.0,
-                                       "calmar_ratio": 0.0, "max_drawdown_pct": 0.0},
-                    "stability":       {"stability_score": 0.0},
-                    "walk_forward":    {"mean_test_sharpe": 0.0, "performance_decay": 0.0},
-                    "monte_carlo":     {"mean_sharpe": 0.0, "sharpe_variance": 0.0,
-                                       "probability_of_loss": 0.5},
-                    "robustness":      0.0,
-                    "composite_score": 0.0,
-                    "rank":            i + 1,
-                })
-        # Sort by composite_score descending
-        ranking_results.sort(key=lambda r: r["composite_score"], reverse=True)
-        for i, r in enumerate(ranking_results):
-            r["rank"] = i + 1
+        pass  # Keep backtester-based ranking
 
     # 5. Allocate capital
     allocator = CapitalAllocator(mode=allocator_mode)

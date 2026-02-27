@@ -118,13 +118,6 @@ class FitnessEvaluator:
         if mdd is None or (isinstance(mdd, float) and math.isnan(mdd)):
             mdd = 0.0
 
-        # Penalise zero-trade strategies (equity never changed)
-        equity_curve = result.get("equity_curve", [])
-        if len(equity_curve) >= 2:
-            if equity_curve[0] == equity_curve[-1]:
-                # No PnL at all — mild penalty
-                return _ZERO_TRADE_PENALTY
-
         fitness = float(sharpe) - abs(float(mdd)) * 0.5
         assert not math.isnan(fitness), f"fitness is NaN: sharpe={sharpe}, mdd={mdd}"
         return fitness
