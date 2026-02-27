@@ -96,14 +96,20 @@ function App() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          ...form,
+          symbol: form.symbol,
+          start: form.start_date,
+          end: form.end_date,
           initial_capital: Number(form.initial_capital),
         }),
       });
 
       if (!response.ok) {
         const errData = await response.json().catch(() => ({}));
-        throw new Error(errData.detail || `HTTP ${response.status}`);
+        const detail = errData.detail;
+        const msg = Array.isArray(detail)
+          ? detail.map((e) => `${e.loc ? e.loc.join('.') : ''}: ${e.msg}`).join('; ')
+          : (typeof detail === 'string' ? detail : `HTTP ${response.status}`);
+        throw new Error(msg);
       }
 
       const result = await response.json();
