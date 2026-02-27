@@ -1,3 +1,6 @@
+import math
+
+
 class Backtester:
     def __init__(self, initial_cash: float) -> None:
         self.initial_cash = initial_cash
@@ -26,4 +29,11 @@ class Backtester:
             (equity_curve[i] - equity_curve[i - 1]) / equity_curve[i - 1]
             for i in range(1, len(equity_curve))
         ]
-        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve, "max_drawdown_pct": max_drawdown_pct, "returns_series": returns_series}
+        n = len(returns_series)
+        if n < 2:
+            volatility_pct = 0.0
+        else:
+            mean = sum(returns_series) / n
+            variance = sum((x - mean) ** 2 for x in returns_series) / (n - 1)
+            volatility_pct = math.sqrt(variance) * 100
+        return {"final_equity": final_equity, "return_pct": return_pct, "equity_curve": equity_curve, "max_drawdown_pct": max_drawdown_pct, "returns_series": returns_series, "volatility_pct": volatility_pct}
