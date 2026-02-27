@@ -331,6 +331,37 @@ class AlwaysLongStrategy:
 
 def test_strategy_always_long_produces_same_result_as_default():
     bt = Backtester(initial_cash=1000)
-    # TypeError: run() got an unexpected keyword argument 'strategy' → RED
     result = bt.run(CANDLES_3, strategy=AlwaysLongStrategy())
     assert result["final_equity"] == 1100.0
+
+
+# ---------------------------------------------------------------------------
+# SELL signal mid-series (multi-trade)
+# RED: engine finds first BUY only, ignores SELL → exits at candles[-1]
+#      → final_equity == 1100.0, but test expects 1050.0
+#      AssertionError: assert 1100.0 == 1050.0
+#
+# BuySellStrategy signals: ["BUY", "SELL", "BUY"]
+# CANDLES_3 closes:        [100,    105,    110 ]
+#
+# Trade 1: BUY @ 100, SELL @ 105
+#   shares_1          = 1000 / 100 = 10.0
+#   cash_after_trade1 = 10.0 * 105 = 1050.0
+#
+# Trade 2: BUY @ 110, no SELL → exit at final candle @ 110 (break-even)
+#   shares_2          = 1050 / 110
+#   cash_after_trade2 = (1050 / 110) * 110 = 1050.0
+#
+# final_equity = 1050.0  (exact in IEEE 754 — assert with ==)
+# ---------------------------------------------------------------------------
+
+class BuySellStrategy:
+    def generate(self, candles: list[dict]) -> list[str]:
+        return ["BUY", "SELL", "BUY"]
+
+
+def test_strategy_sell_signal_closes_position_mid_series():
+    bt = Backtester(initial_cash=1000)
+    # Current engine ignores SELL → uses candles[-1] close → 1100.0 → RED
+    result = bt.run(CANDLES_3, strategy=BuySellStrategy())
+    assert result["final_equity"] == 1050.0
